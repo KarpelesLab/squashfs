@@ -61,3 +61,7 @@ func (f SquashFlags) String() string {
 
 	return strings.Join(opt, "|")
 }
+
+func (f SquashFlags) Has(what SquashFlags) bool {
+	return f&what == what
+}
