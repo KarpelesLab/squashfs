@@ -26,7 +26,7 @@ type Superblock struct {
 	IdCount           uint16
 	VMajor            uint16
 	VMinor            uint16
-	RootInode         uint64
+	RootInode         inodeRef
 	BytesUsed         uint64
 	IdTableStart      uint64
 	XattrIdTableStart uint64
@@ -77,7 +77,7 @@ func (s *Superblock) UnmarshalBinary(data []byte) error {
 	s.IdCount = s.order.Uint16(data[26:28])
 	s.VMajor = s.order.Uint16(data[28:30])
 	s.VMinor = s.order.Uint16(data[30:32])
-	s.RootInode = s.order.Uint64(data[32:40])
+	s.RootInode = inodeRef(s.order.Uint64(data[32:40]))
 	s.BytesUsed = s.order.Uint64(data[40:48])
 	s.IdTableStart = s.order.Uint64(data[48:56])
 	s.XattrIdTableStart = s.order.Uint64(data[56:64])
@@ -86,7 +86,12 @@ func (s *Superblock) UnmarshalBinary(data []byte) error {
 	s.FragTableStart = s.order.Uint64(data[80:88])
 	s.ExportTableStart = s.order.Uint64(data[88:96])
 
-	log.Printf("parsed SquashFS %d.%d blocksize=%d bytes=%d comp=%s", s.VMajor, s.VMinor, s.BlockSize, s.BytesUsed, s.Comp)
+	if uint32(1)<<s.BlockLog != s.BlockSize {
+		return errors.New("invalid squashfs: block size check failed")
+	}
+
+	log.Printf("parsed SquashFS %d.%d blocksize=%d bytes=%d comp=%s flags=%s", s.VMajor, s.VMinor, s.BlockSize, s.BytesUsed, s.Comp, s.Flags)
+	log.Printf("inode table at 0x%x, count=%d, root=%s", s.InodeTableStart, s.InodeCnt, s.RootInode)
 
 	return nil
 }
