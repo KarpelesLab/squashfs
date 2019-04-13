@@ -1,13 +1,14 @@
 package squashfs
 
 import (
-	"bytes"
 	"encoding/binary"
 	"errors"
 	"io"
 	"log"
 	"reflect"
 )
+
+const SuperblockSize = 96
 
 // https://dr-emann.github.io/squashfs/
 type Superblock struct {
@@ -37,7 +38,7 @@ type Superblock struct {
 
 func New(fs io.ReaderAt) (*Superblock, error) {
 	sb := &Superblock{fs: fs}
-	head := make([]byte, sb.binarySize())
+	head := make([]byte, SuperblockSize)
 
 	log.Printf("squash: read header %d bytes", len(head))
 	_, err := fs.ReadAt(head, 0)
@@ -54,10 +55,6 @@ func New(fs io.ReaderAt) (*Superblock, error) {
 }
 
 func (s *Superblock) UnmarshalBinary(data []byte) error {
-	v := reflect.ValueOf(s).Elem()
-	c := v.NumField()
-	r := bytes.NewReader(data)
-
 	switch string(data[:4]) {
 	case "hsqs":
 		s.order = binary.LittleEndian
@@ -67,19 +64,27 @@ func (s *Superblock) UnmarshalBinary(data []byte) error {
 		return errors.New("invalid squashfs partition")
 	}
 
-	// Decode
-	var err error
-	for i := 0; i < c; i++ {
-		c := v.Type().Field(i).Name[0]
-		if c < 'A' || c > 'Z' {
-			continue
-		}
-		log.Printf("read %s", v.Type().Field(i).Name)
-		err = binary.Read(r, s.order, v.Field(i).Interface())
-		if err != nil {
-			return err
-		}
-	}
+	s.Magic = s.order.Uint32(data[0:4])
+	s.InodeCnt = s.order.Uint32(data[4:8])
+	s.ModTime = int32(s.order.Uint32(data[8:12]))
+	s.BlockSize = s.order.Uint32(data[12:16])
+	s.FragCount = s.order.Uint32(data[16:20])
+	s.Comp = SquashComp(s.order.Uint16(data[20:22]))
+	s.BlockLog = s.order.Uint16(data[22:24])
+	s.Flags = SquashFlags(s.order.Uint16(data[24:26]))
+	s.IdCount = s.order.Uint16(data[26:28])
+	s.VMajor = s.order.Uint16(data[28:30])
+	s.VMinor = s.order.Uint16(data[30:32])
+	s.RootInode = s.order.Uint64(data[32:40])
+	s.BytesUsed = s.order.Uint64(data[40:48])
+	s.IdTableStart = s.order.Uint64(data[48:56])
+	s.XattrIdTableStart = s.order.Uint64(data[56:64])
+	s.InodeTableStart = s.order.Uint64(data[64:72])
+	s.DirTableStart = s.order.Uint64(data[72:80])
+	s.FragTableStart = s.order.Uint64(data[80:88])
+	s.ExportTableStart = s.order.Uint64(data[88:96])
+
+	log.Printf("opened SquashFS %d.%d blocksize=%d bytes=%d", s.VMajor, s.VMinor, s.BlockSize, s.BytesUsed)
 
 	return nil
 }
