@@ -40,15 +40,17 @@ func New(fs io.ReaderAt) (*Superblock, error) {
 	sb := &Superblock{fs: fs}
 	head := make([]byte, SuperblockSize)
 
-	log.Printf("squash: read header %d bytes", len(head))
 	_, err := fs.ReadAt(head, 0)
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("squash: read header, parsing")
 	err = sb.UnmarshalBinary(head)
 	if err != nil {
 		return nil, err
+	}
+
+	if sb.VMajor != 4 || sb.VMinor != 0 {
+		return nil, errors.New("not squashfs 4.0")
 	}
 
 	return sb, nil
@@ -84,7 +86,7 @@ func (s *Superblock) UnmarshalBinary(data []byte) error {
 	s.FragTableStart = s.order.Uint64(data[80:88])
 	s.ExportTableStart = s.order.Uint64(data[88:96])
 
-	log.Printf("opened SquashFS %d.%d blocksize=%d bytes=%d", s.VMajor, s.VMinor, s.BlockSize, s.BytesUsed)
+	log.Printf("parsed SquashFS %d.%d blocksize=%d bytes=%d comp=%s", s.VMajor, s.VMinor, s.BlockSize, s.BytesUsed, s.Comp)
 
 	return nil
 }
