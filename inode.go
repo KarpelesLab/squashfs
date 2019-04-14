@@ -178,3 +178,7 @@ func (i *Inode) OpenDir() error {
 	}
 	return os.ErrInvalid
 }
+
+func (i *Inode) ReadDir(input *fuse.ReadIn, out *fuse.DirEntryList) error {
+	return os.ErrInvalid
+}
