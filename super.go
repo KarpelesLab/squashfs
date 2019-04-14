@@ -15,6 +15,10 @@ type Superblock struct {
 	fs    io.ReaderAt
 	order binary.ByteOrder
 
+	rootIno  uint64
+	inoIdx   map[uint64]inodeRef // inode refs
+	inoTable map[int]uint64      // table index number → location in file
+
 	Magic             uint32
 	InodeCnt          uint32
 	ModTime           int32
@@ -89,6 +93,11 @@ func (s *Superblock) UnmarshalBinary(data []byte) error {
 	s.DirTableStart = s.order.Uint64(data[72:80])
 	s.FragTableStart = s.order.Uint64(data[80:88])
 	s.ExportTableStart = s.order.Uint64(data[88:96])
+
+	if s.Magic != 0x73717368 {
+		// shouldn't happen
+		return errors.New("invalid squashfs partition")
+	}
 
 	if uint32(1)<<s.BlockLog != s.BlockSize {
 		return errors.New("invalid squashfs: block size check failed")
