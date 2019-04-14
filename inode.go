@@ -173,5 +173,8 @@ func (i *Inode) Open(flags uint32) error {
 }
 
 func (i *Inode) OpenDir() error {
+	if i.IsDir() {
+		return nil
+	}
 	return os.ErrInvalid
 }
