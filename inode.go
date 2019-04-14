@@ -17,6 +17,12 @@ type Inode struct {
 	GidIdx  uint16
 	ModTime int32
 	Ino     uint32 // inode number
+
+	StartBlock uint64
+	NLink      uint32
+	Size       uint64 // Careful, actual on disk size varies depending on type
+	Offset     uint32 // uint16 for directories
+	ParentIno  uint32 // for directories
 }
 
 func (sb *Superblock) GetInode(ino uint64) (tpkgfs.Inode, error) {
@@ -62,6 +68,44 @@ func (sb *Superblock) GetInodeRef(inor inodeRef) (tpkgfs.Inode, error) {
 	}
 
 	log.Printf("read inode #%d type=%d", ino.Ino, ino.Type)
+
+	switch ino.Type {
+	case 1: // Basic Directory
+		var u32 uint32
+		err = binary.Read(r, sb.order, &u32)
+		if err != nil {
+			return nil, err
+		}
+		ino.StartBlock = uint64(u32)
+
+		err = binary.Read(r, sb.order, &ino.NLink)
+		if err != nil {
+			return nil, err
+		}
+
+		var u16 uint16
+		err = binary.Read(r, sb.order, &u16)
+		if err != nil {
+			return nil, err
+		}
+		ino.Size = uint64(u16)
+
+		err = binary.Read(r, sb.order, &u16)
+		if err != nil {
+			return nil, err
+		}
+		ino.Offset = uint32(u16)
+
+		err = binary.Read(r, sb.order, &ino.ParentIno)
+		if err != nil {
+			return nil, err
+		}
+
+		log.Printf("squashfs: read basic directory success, parent=%d", ino.ParentIno)
+	default:
+		log.Printf("squashfs: unsupported inode type %d", ino.Type)
+		return nil, os.ErrInvalid
+	}
 
 	return nil, os.ErrInvalid // TODO
 }
