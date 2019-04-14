@@ -5,10 +5,7 @@ import (
 	"errors"
 	"io"
 	"log"
-	"os"
 	"reflect"
-
-	"github.com/tardigradeos/tpkg/tpkgfs"
 )
 
 const SuperblockSize = 96
@@ -43,11 +40,6 @@ type Superblock struct {
 	ExportTableStart  uint64
 }
 
-func (sb *Superblock) GetInode(ino uint64) (tpkgfs.Inode, error) {
-	log.Printf("get inode WIP %d", ino)
-	return nil, os.ErrInvalid
-}
-
 func New(fs io.ReaderAt) (*Superblock, error) {
 	sb := &Superblock{fs: fs}
 	head := make([]byte, SuperblockSize)
@@ -68,6 +60,9 @@ func New(fs io.ReaderAt) (*Superblock, error) {
 	if !sb.Flags.Has(EXPORTABLE) {
 		return nil, errors.New("need exportable squashfs")
 	}
+
+	// get root inode
+	sb.GetInodeRef(sb.RootInode)
 
 	return sb, nil
 }

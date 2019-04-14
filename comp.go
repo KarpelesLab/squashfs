@@ -1,6 +1,12 @@
 package squashfs
 
-import "fmt"
+import (
+	"bytes"
+	"compress/zlib"
+	"errors"
+	"fmt"
+	"io"
+)
 
 type SquashComp uint16
 
@@ -29,4 +35,22 @@ func (s SquashComp) String() string {
 		return "ZSTD"
 	}
 	return fmt.Sprintf("SquashComp(%d)", s)
+}
+
+func (s SquashComp) decompress(buf []byte) ([]byte, error) {
+	switch s {
+	case GZip:
+		r, err := zlib.NewReader(bytes.NewReader(buf))
+		if err != nil {
+			return nil, err
+		}
+		b := &bytes.Buffer{}
+		_, err = io.Copy(b, r)
+		if err != nil {
+			return nil, err
+		}
+		r.Close()
+		return b.Bytes(), nil
+	}
+	return nil, errors.New("unsupported compression format")
 }
