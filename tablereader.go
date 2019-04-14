@@ -2,6 +2,7 @@ package squashfs
 
 import "log"
 
+// TODO add buf cache to allow multiple accesses to same block without re-reading
 type tableReader struct {
 	sb   *Superblock
 	buf  []byte

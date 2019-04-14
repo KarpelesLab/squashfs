@@ -179,6 +179,15 @@ func (i *Inode) OpenDir() error {
 	return os.ErrInvalid
 }
 
-func (i *Inode) ReadDir(input *fuse.ReadIn, out *fuse.DirEntryList) error {
+func (i *Inode) ReadDir(input *fuse.ReadIn, out *fuse.DirEntryList, plus bool) error {
+	switch i.Type {
+	case 1:
+		// basic dir
+		t, err := i.sb.newTableReader(int64(i.sb.DirTableStart)+int64(i.StartBlock), int(i.Offset))
+		if err != nil {
+			return err
+		}
+		_ = t
+	}
 	return os.ErrInvalid
 }
