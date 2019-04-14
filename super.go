@@ -5,7 +5,10 @@ import (
 	"errors"
 	"io"
 	"log"
+	"os"
 	"reflect"
+
+	"github.com/tardigradeos/tpkg/tpkgfs"
 )
 
 const SuperblockSize = 96
@@ -38,6 +41,11 @@ type Superblock struct {
 	DirTableStart     uint64
 	FragTableStart    uint64
 	ExportTableStart  uint64
+}
+
+func (sb *Superblock) GetInode(ino uint64) (tpkgfs.Inode, error) {
+	log.Printf("get inode WIP %d", ino)
+	return nil, os.ErrInvalid
 }
 
 func New(fs io.ReaderAt) (*Superblock, error) {
