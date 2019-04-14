@@ -2,16 +2,20 @@ package squashfs
 
 import "log"
 
-type inodeReader struct {
+type tableReader struct {
 	sb   *Superblock
 	buf  []byte
 	offt int64
 }
 
-func (sb *Superblock) newInodeReader(ino inodeRef) (*inodeReader, error) {
-	ir := &inodeReader{
+func (sb *Superblock) newInodeReader(ino inodeRef) (*tableReader, error) {
+	return sb.newTableReader(int64(sb.InodeTableStart)+int64(ino.Index()), int(ino.Offset()))
+}
+
+func (sb *Superblock) newTableReader(base int64, start int) (*tableReader, error) {
+	ir := &tableReader{
 		sb:   sb,
-		offt: int64(sb.InodeTableStart + uint64(ino.Index())),
+		offt: base,
 	}
 
 	err := ir.readBlock()
@@ -19,15 +23,15 @@ func (sb *Superblock) newInodeReader(ino inodeRef) (*inodeReader, error) {
 		return nil, err
 	}
 
-	if offt := int(ino.Offset()); offt != 0 {
+	if start != 0 {
 		// need to cut offset
-		ir.buf = ir.buf[offt:]
+		ir.buf = ir.buf[start:]
 	}
 
 	return ir, nil
 }
 
-func (i *inodeReader) readBlock() error {
+func (i *tableReader) readBlock() error {
 	buf := make([]byte, 2)
 	_, err := i.sb.fs.ReadAt(buf, i.offt)
 	if err != nil {
@@ -63,7 +67,7 @@ func (i *inodeReader) readBlock() error {
 	return nil
 }
 
-func (i *inodeReader) Read(p []byte) (int, error) {
+func (i *tableReader) Read(p []byte) (int, error) {
 	// read from buf, if empty call readBlock()
 	if i.buf == nil {
 		err := i.readBlock()
