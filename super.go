@@ -15,9 +15,9 @@ type Superblock struct {
 	fs    io.ReaderAt
 	order binary.ByteOrder
 
-	rootIno  uint64
-	inoIdx   map[uint64]inodeRef // inode refs
-	inoTable map[int]uint64      // table index number → location in file
+	rootIno  *Inode
+	rootInoN uint64
+	inoIdx   map[uint64]inodeRef // inode refs (see export table)
 
 	Magic             uint32
 	InodeCnt          uint32
@@ -62,7 +62,12 @@ func New(fs io.ReaderAt) (*Superblock, error) {
 	}
 
 	// get root inode
-	sb.GetInodeRef(sb.RootInode)
+	sb.rootIno, err = sb.GetInodeRef(sb.RootInode)
+	if err != nil {
+		return nil, err
+	}
+
+	sb.rootInoN = uint64(sb.rootIno.Ino)
 
 	return sb, nil
 }

@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 
+	"github.com/hanwen/go-fuse/fuse"
 	"github.com/tardigradeos/tpkg/tpkgfs"
 )
 
@@ -28,12 +29,17 @@ type Inode struct {
 func (sb *Superblock) GetInode(ino uint64) (tpkgfs.Inode, error) {
 	if ino == 1 {
 		// get root inode
+		return sb.rootIno, nil
+	}
+	if ino == sb.rootInoN {
+		// we reverse
+		ino = 1
 	}
 	log.Printf("get inode WIP %d", ino)
 	return nil, os.ErrInvalid
 }
 
-func (sb *Superblock) GetInodeRef(inor inodeRef) (tpkgfs.Inode, error) {
+func (sb *Superblock) GetInodeRef(inor inodeRef) (*Inode, error) {
 	r, err := sb.newInodeReader(inor)
 	if err != nil {
 		return nil, err
@@ -107,5 +113,65 @@ func (sb *Superblock) GetInodeRef(inor inodeRef) (tpkgfs.Inode, error) {
 		return nil, os.ErrInvalid
 	}
 
-	return nil, os.ErrInvalid // TODO
+	return ino, nil
+}
+
+func (i *Inode) Lookup(name string) (uint64, error) {
+	log.Printf("squashfs: lookup name %s from inode %d TODO", name, i.Ino)
+	return 0, os.ErrInvalid
+}
+
+func (i *Inode) Mode() os.FileMode {
+	res := os.FileMode(i.Perm)
+	switch i.Type {
+	case 1, 8: // Dir
+		res |= os.ModeDir
+	case 2, 9: // file
+		// nothing
+	case 3, 10:
+		res |= os.ModeSymlink
+	case 4, 11:
+		res |= os.ModeDevice
+	case 5, 12:
+		res |= os.ModeCharDevice
+	case 6, 13:
+		res |= os.ModeNamedPipe
+	case 7, 14:
+		res |= os.ModeSocket
+	}
+
+	return res
+}
+
+func (i *Inode) IsDir() bool {
+	switch i.Type {
+	case 1, 8:
+		return true
+	}
+	return false
+}
+
+func (i *Inode) FillAttr(attr *fuse.Attr) error {
+	attr.Size = i.Size
+	attr.Blocks = 1
+	attr.Mode = tpkgfs.ModeToUnix(i.Mode())
+	attr.Nlink = i.NLink // 1 required
+	attr.Rdev = 1
+	attr.Blksize = i.sb.BlockSize
+	attr.Atime = uint64(i.ModTime)
+	attr.Mtime = uint64(i.ModTime)
+	attr.Ctime = uint64(i.ModTime)
+	return nil
+}
+
+func (i *Inode) Readlink() ([]byte, error) {
+	return nil, os.ErrInvalid
+}
+
+func (i *Inode) Open(flags uint32) error {
+	return os.ErrInvalid
+}
+
+func (i *Inode) OpenDir() error {
+	return os.ErrInvalid
 }
