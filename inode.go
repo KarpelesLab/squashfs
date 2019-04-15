@@ -160,7 +160,7 @@ func (sb *Superblock) GetInodeRef(inor inodeRef) (*Inode, error) {
 				blocks += 1
 			}
 		}
-		log.Printf("estimated %d blocks", blocks)
+		//log.Printf("estimated %d blocks", blocks)
 
 		ino.Blocks = make([]uint32, blocks)
 		ino.BlocksOfft = make([]uint64, blocks)
@@ -177,6 +177,11 @@ func (sb *Superblock) GetInodeRef(inor inodeRef) (*Inode, error) {
 			ino.Blocks[i] = u32
 			ino.BlocksOfft[i] = offt
 			offt += uint64(u32) & 0xfffff // 1MB-1, since max block size is 1MB
+		}
+
+		if ino.FragBlock != 0xffffffff {
+			// this has a fragment instead of last block
+			ino.Blocks = append(ino.Blocks, 0xffffffff) // special code
 		}
 	case 3: // basic symlink
 		err = binary.Read(r, sb.order, &ino.NLink)
@@ -234,19 +239,70 @@ func (i *Inode) ReadAt(p []byte, off int64) (int, error) {
 		n := 0
 
 		for {
-			// read block
-			buf := make([]byte, i.Blocks[block]&0xfffff)
-			_, err := i.sb.fs.ReadAt(buf, int64(i.StartBlock+i.BlocksOfft[block]))
-			if err != nil {
-				return n, err
-			}
+			var buf []byte
 
-			// check for compression
-			if i.Blocks[block]&0x1000000 == 0 {
-				// compressed
+			// read block
+			if i.Blocks[block] == 0xffffffff {
+				// this is a fragment, need to decode fragment
+				log.Printf("frag table offset=%d", i.sb.FragTableStart)
+
+				// read table offset
+				sub := int64(i.FragBlock) / 512 * 8
+				blInfo := make([]byte, 8)
+				_, err := i.sb.fs.ReadAt(blInfo, int64(i.sb.FragTableStart)+sub)
+				if err != nil {
+					return n, err
+				}
+
+				// read table
+				t, err := i.sb.newTableReader(int64(i.sb.order.Uint64(blInfo)), int(i.FragBlock%512)*16)
+				if err != nil {
+					return n, err
+				}
+
+				//log.Printf("fragment blinfo=%v", blInfo)
+				var start uint64
+				var size uint32
+				err = binary.Read(t, i.sb.order, &start)
+				if err != nil {
+					return n, err
+				}
+				err = binary.Read(t, i.sb.order, &size)
+				if err != nil {
+					return n, err
+				}
+
+				//log.Printf("fragment at %d:%d => start=0x%x (size=0x%x) len=%d", i.FragBlock, i.FragOfft, start, size, len(p))
+				// read fragment
+				buf = make([]byte, size)
+				_, err = i.sb.fs.ReadAt(buf, int64(start))
+				if err != nil {
+					return n, err
+				}
+
+				// decompress
 				buf, err = i.sb.Comp.decompress(buf)
 				if err != nil {
 					return n, err
+				}
+
+				if i.FragOfft != 0 {
+					buf = buf[i.FragOfft:]
+				}
+			} else {
+				buf = make([]byte, i.Blocks[block]&0xfffff)
+				_, err := i.sb.fs.ReadAt(buf, int64(i.StartBlock+i.BlocksOfft[block]))
+				if err != nil {
+					return n, err
+				}
+
+				// check for compression
+				if i.Blocks[block]&0x1000000 == 0 {
+					// compressed
+					buf, err = i.sb.Comp.decompress(buf)
+					if err != nil {
+						return n, err
+					}
 				}
 			}
 
