@@ -215,6 +215,37 @@ func (sb *Superblock) GetInodeRef(inor inodeRef) (*Inode, error) {
 }
 
 func (i *Inode) Lookup(name string) (uint64, error) {
+	switch i.Type {
+	case 1:
+		// basic dir, we need to iterate (cache data?)
+		dr, err := i.sb.dirReader(i)
+		if err != nil {
+			return 0, err
+		}
+		for {
+			ename, inoR, err := dr.next()
+			if err != nil {
+				if err == io.EOF {
+					return 0, os.ErrNotExist
+				}
+				return 0, err
+			}
+
+			if name == ename {
+				// found
+				found, err := i.sb.GetInodeRef(inoR)
+				if err != nil {
+					return 0, err
+				}
+				// cache
+				i.sb.inoIdxL.Lock()
+				i.sb.inoIdx[found.Ino] = inoR
+				i.sb.inoIdxL.Unlock()
+				// return
+				return found.publicInodeNum(), nil
+			}
+		}
+	}
 	log.Printf("squashfs: lookup name %s from inode %d TODO", name, i.Ino)
 	return 0, os.ErrInvalid
 }
@@ -271,7 +302,8 @@ func (i *Inode) Readlink() ([]byte, error) {
 }
 
 func (i *Inode) Open(flags uint32) error {
-	return os.ErrInvalid
+	// ok :)
+	return nil
 }
 
 func (i *Inode) OpenDir() error {
