@@ -28,6 +28,13 @@ type Inode struct {
 	Offset     uint32 // uint16 for directories
 	ParentIno  uint32 // for directories
 	SymTarget  []byte // The target path this symlink points to
+
+	// fragment
+	FragBlock uint32
+	FragOfft  uint32
+
+	// file blocks
+	Blocks []uint32
 }
 
 func (sb *Superblock) GetInode(ino uint64) (tpkgfs.Inode, error) {
@@ -121,6 +128,48 @@ func (sb *Superblock) GetInodeRef(inor inodeRef) (*Inode, error) {
 		}
 
 		log.Printf("squashfs: read basic directory success, parent=%d", ino.ParentIno)
+	case 2: // Basic file
+		var u32 uint32
+		err = binary.Read(r, sb.order, &u32)
+		if err != nil {
+			return nil, err
+		}
+		ino.StartBlock = uint64(u32)
+
+		// fragment_block_index
+		err = binary.Read(r, sb.order, &ino.FragBlock)
+		if err != nil {
+			return nil, err
+		}
+		err = binary.Read(r, sb.order, &ino.FragOfft)
+		if err != nil {
+			return nil, err
+		}
+		err = binary.Read(r, sb.order, &u32)
+		if err != nil {
+			return nil, err
+		}
+		ino.Size = uint64(u32)
+
+		// try to find out how many block_sizes entries
+		blocks := int(ino.Size / uint64(sb.BlockSize))
+		if ino.FragBlock == 0xffffffff {
+			// file does not end in a fragment
+			if ino.Size%uint64(sb.BlockSize) != 0 {
+				blocks += 1
+			}
+		}
+		log.Printf("estimated %d blocks", blocks)
+
+		ino.Blocks = make([]uint32, blocks)
+
+		// read blocks
+		for i := 0; i < blocks; i += 1 {
+			err = binary.Read(r, sb.order, &ino.Blocks[i])
+			if err != nil {
+				return nil, err
+			}
+		}
 	case 3: // basic symlink
 		err = binary.Read(r, sb.order, &ino.NLink)
 		if err != nil {
