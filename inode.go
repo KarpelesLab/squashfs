@@ -214,6 +214,68 @@ func (sb *Superblock) GetInodeRef(inor inodeRef) (*Inode, error) {
 	return ino, nil
 }
 
+func (i *Inode) ReadAt(p []byte, off int64) (int, error) {
+	switch i.Type {
+	case 2: // Basic file
+		log.Printf("read request off=%d len=%d", off, len(p))
+
+		if uint64(off) >= i.Size {
+			// no read
+			return 0, nil
+		}
+
+		if uint64(off+int64(len(p))) > i.Size {
+			p = p[:int64(i.Size)-off]
+		}
+
+		// we need to know what block to start with
+		block := int(off / int64(i.sb.BlockSize))
+		offset := int(off % int64(i.sb.BlockSize))
+		n := 0
+
+		for {
+			// read block
+			buf := make([]byte, i.Blocks[block]&0xfffff)
+			_, err := i.sb.fs.ReadAt(buf, int64(i.StartBlock+i.BlocksOfft[block]))
+			if err != nil {
+				return n, err
+			}
+
+			// check for compression
+			if i.Blocks[block]&0x1000000 == 0 {
+				// compressed
+				buf, err = i.sb.Comp.decompress(buf)
+				if err != nil {
+					return n, err
+				}
+			}
+
+			// check offset
+			if offset > 0 {
+				buf = buf[offset:]
+			}
+
+			// copy
+			l := copy(p, buf)
+			n += l
+			if l == len(p) {
+				// end of copy
+				return n, nil
+			}
+
+			// advance out ptr
+			p = p[l:]
+
+			// next block
+			block += 1
+			offset = 0
+		}
+
+		log.Printf("load at block=%d offset=%d", block, offset)
+	}
+	return 0, os.ErrInvalid
+}
+
 func (i *Inode) Lookup(name string) (uint64, error) {
 	switch i.Type {
 	case 1:
