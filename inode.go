@@ -33,8 +33,9 @@ type Inode struct {
 	FragBlock uint32
 	FragOfft  uint32
 
-	// file blocks
-	Blocks []uint32
+	// file blocks (some have value 0x1001000)
+	Blocks     []uint32
+	BlocksOfft []uint64
 }
 
 func (sb *Superblock) GetInode(ino uint64) (tpkgfs.Inode, error) {
@@ -162,13 +163,20 @@ func (sb *Superblock) GetInodeRef(inor inodeRef) (*Inode, error) {
 		log.Printf("estimated %d blocks", blocks)
 
 		ino.Blocks = make([]uint32, blocks)
+		ino.BlocksOfft = make([]uint64, blocks)
+
+		offt := uint64(0)
 
 		// read blocks
 		for i := 0; i < blocks; i += 1 {
-			err = binary.Read(r, sb.order, &ino.Blocks[i])
+			err = binary.Read(r, sb.order, &u32)
 			if err != nil {
 				return nil, err
 			}
+
+			ino.Blocks[i] = u32
+			ino.BlocksOfft[i] = offt
+			offt += uint64(u32) & 0xfffff // 1MB-1, since max block size is 1MB
 		}
 	case 3: // basic symlink
 		err = binary.Read(r, sb.order, &ino.NLink)
@@ -298,78 +306,27 @@ func (i *Inode) ReadDir(input *fuse.ReadIn, out *fuse.DirEntryList, plus bool) e
 	pos := input.Offset + 1
 	log.Printf("readdir offset %d", input.Offset)
 
-	var count, startBlock, inodeNum uint32
-	var offset, typ, siz uint16
-	var inoNum2 int16
-	var name []byte
-
 	switch i.Type {
 	case 1:
 		// basic dir
-		tbl, err := i.sb.newTableReader(int64(i.sb.DirTableStart)+int64(i.StartBlock), int(i.Offset))
+		dr, err := i.sb.dirReader(i)
 		if err != nil {
 			return err
 		}
-		t := &io.LimitedReader{R: tbl, N: int64(i.Size)}
+		var name string
+		var inoR inodeRef
 
 		cur := uint64(0)
 		for {
 			cur += 1
 			if cur > 2 {
-				if count == 0 {
-					if t.N == 3 {
-						// end of dir
+				name, inoR, err = dr.next()
+				if err != nil {
+					if err == io.EOF {
 						return nil
 					}
-					// need to read new dir header
-					err = binary.Read(t, i.sb.order, &count)
-					if err != nil {
-						return err
-					}
-					err = binary.Read(t, i.sb.order, &startBlock)
-					if err != nil {
-						return err
-					}
-					err = binary.Read(t, i.sb.order, &inodeNum)
-					if err != nil {
-						return err
-					}
-					log.Printf("dir read header count=%d", count)
-					count += 1
-				}
-				if count == 0 {
-					// empty dir??
-					return nil
-				}
-				// Read...
-				count -= 1
-				err = binary.Read(t, i.sb.order, &offset)
-				if err != nil {
 					return err
 				}
-				err = binary.Read(t, i.sb.order, &inoNum2)
-				if err != nil {
-					return err
-				}
-				err = binary.Read(t, i.sb.order, &typ)
-				if err != nil {
-					return err
-				}
-				err = binary.Read(t, i.sb.order, &siz)
-				if err != nil {
-					return err
-				}
-				// read name
-				name = make([]byte, int(siz)+1)
-				_, err = io.ReadFull(t, name)
-				if err != nil {
-					return err
-				}
-
-				log.Printf("dir read entry %d namelen=%d %s", cur, siz, name)
-			}
-			if cur > i.Size {
-				return nil
 			}
 			if cur < pos {
 				continue
@@ -407,15 +364,14 @@ func (i *Inode) ReadDir(input *fuse.ReadIn, out *fuse.DirEntryList, plus bool) e
 			}
 
 			// make inode ref
-			inoRef := inodeRef((uint64(startBlock) << 16) | uint64(offset))
-			ino, err := i.sb.GetInodeRef(inoRef)
+			ino, err := i.sb.GetInodeRef(inoR)
 			if err != nil {
 				log.Printf("failed to load inode: %s")
 				return err
 			}
 
 			i.sb.inoIdxL.Lock()
-			i.sb.inoIdx[ino.Ino] = inoRef
+			i.sb.inoIdx[ino.Ino] = inoR
 			i.sb.inoIdxL.Unlock()
 
 			if !plus {
