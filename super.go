@@ -112,7 +112,7 @@ func (s *Superblock) UnmarshalBinary(data []byte) error {
 	}
 
 	log.Printf("parsed SquashFS %d.%d blocksize=%d bytes=%d comp=%s flags=%s", s.VMajor, s.VMinor, s.BlockSize, s.BytesUsed, s.Comp, s.Flags)
-	log.Printf("inode table at 0x%x, export at 0x%x, count=%d, root=%s", s.InodeTableStart, s.ExportTableStart, s.InodeCnt, s.RootInode)
+	//log.Printf("inode table at 0x%x, export at 0x%x, count=%d, root=%s", s.InodeTableStart, s.ExportTableStart, s.InodeCnt, s.RootInode)
 
 	return nil
 }

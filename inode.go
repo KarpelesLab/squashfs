@@ -182,6 +182,10 @@ func (i *Inode) OpenDir() error {
 func (i *Inode) ReadDir(input *fuse.ReadIn, out *fuse.DirEntryList, plus bool) error {
 	switch i.Type {
 	case 1:
+		if i.Size == 3 {
+			// empty directory
+			return nil
+		}
 		// basic dir
 		t, err := i.sb.newTableReader(int64(i.sb.DirTableStart)+int64(i.StartBlock), int(i.Offset))
 		if err != nil {
