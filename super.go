@@ -6,6 +6,9 @@ import (
 	"io"
 	"log"
 	"reflect"
+	"sync"
+
+	"github.com/tardigradeos/tpkg/tpkgfs"
 )
 
 const SuperblockSize = 96
@@ -17,7 +20,10 @@ type Superblock struct {
 
 	rootIno  *Inode
 	rootInoN uint64
-	inoIdx   map[uint64]inodeRef // inode refs (see export table)
+	inoIdx   map[uint32]inodeRef // inode refs (see export table)
+	inoIdxL  sync.RWMutex
+	inoOfft  uint64
+	fuse     *tpkgfs.PkgFS
 
 	Magic             uint32
 	InodeCnt          uint32
@@ -40,8 +46,12 @@ type Superblock struct {
 	ExportTableStart  uint64
 }
 
-func New(fs io.ReaderAt) (*Superblock, error) {
-	sb := &Superblock{fs: fs}
+func New(fs io.ReaderAt, inoOfft uint64, fuse *tpkgfs.PkgFS) (*Superblock, error) {
+	sb := &Superblock{fs: fs,
+		fuse:    fuse,
+		inoOfft: inoOfft,
+		inoIdx:  make(map[uint32]inodeRef),
+	}
 	head := make([]byte, SuperblockSize)
 
 	_, err := fs.ReadAt(head, 0)
