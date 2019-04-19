@@ -30,6 +30,7 @@ type Inode struct {
 	SymTarget  []byte // The target path this symlink points to
 	IdxCount   uint16 // index count for advanced directories
 	XattrIdx   uint32 // xattr table index (if relevant)
+	Sparse     uint64
 
 	// fragment
 	FragBlock uint32
@@ -132,7 +133,7 @@ func (sb *Superblock) GetInodeRef(inor inodeRef) (*Inode, error) {
 			return nil, err
 		}
 
-		log.Printf("squashfs: read basic directory success, parent=%d", ino.ParentIno)
+		//log.Printf("squashfs: read basic directory success, parent=%d", ino.ParentIno)
 	case 8: // Extended dir
 		var u32 uint32
 		var u16 uint16
@@ -174,7 +175,7 @@ func (sb *Superblock) GetInodeRef(inor inodeRef) (*Inode, error) {
 		if err != nil {
 			return nil, err
 		}
-		log.Printf("squashfs: read extended directory success, parent=%d indexes=%d size=%d", ino.ParentIno, ino.IdxCount, ino.Size)
+		//log.Printf("squashfs: read extended directory success, parent=%d indexes=%d size=%d", ino.ParentIno, ino.IdxCount, ino.Size)
 	case 2: // Basic file
 		var u32 uint32
 		err = binary.Read(r, sb.order, &u32)
@@ -229,6 +230,76 @@ func (sb *Superblock) GetInodeRef(inor inodeRef) (*Inode, error) {
 			// this has a fragment instead of last block
 			ino.Blocks = append(ino.Blocks, 0xffffffff) // special code
 		}
+	case 9: // extended file
+		err = binary.Read(r, sb.order, &ino.StartBlock)
+		if err != nil {
+			return nil, err
+		}
+
+		err = binary.Read(r, sb.order, &ino.Size)
+		if err != nil {
+			return nil, err
+		}
+
+		err = binary.Read(r, sb.order, &ino.Sparse) // TODO how to handle this?
+		if err != nil {
+			return nil, err
+		}
+
+		err = binary.Read(r, sb.order, &ino.NLink)
+		if err != nil {
+			return nil, err
+		}
+
+		// fragment_block_index
+		err = binary.Read(r, sb.order, &ino.FragBlock)
+		if err != nil {
+			return nil, err
+		}
+		err = binary.Read(r, sb.order, &ino.FragOfft)
+		if err != nil {
+			return nil, err
+		}
+
+		err = binary.Read(r, sb.order, &ino.XattrIdx)
+		if err != nil {
+			return nil, err
+		}
+
+		// try to find out how many block_sizes entries
+		blocks := int(ino.Size / uint64(sb.BlockSize))
+		if ino.FragBlock == 0xffffffff {
+			// file does not end in a fragment
+			if ino.Size%uint64(sb.BlockSize) != 0 {
+				blocks += 1
+			}
+		}
+		//log.Printf("estimated %d blocks", blocks)
+
+		ino.Blocks = make([]uint32, blocks)
+		ino.BlocksOfft = make([]uint64, blocks)
+		var u32 uint32
+
+		offt := uint64(0)
+
+		// read blocks
+		for i := 0; i < blocks; i += 1 {
+			err = binary.Read(r, sb.order, &u32)
+			if err != nil {
+				return nil, err
+			}
+
+			ino.Blocks[i] = u32
+			ino.BlocksOfft[i] = offt
+			offt += uint64(u32) & 0xfffff // 1MB-1, since max block size is 1MB
+		}
+
+		if ino.FragBlock != 0xffffffff {
+			// this has a fragment instead of last block
+			ino.Blocks = append(ino.Blocks, 0xffffffff) // special code
+		}
+
+		//log.Printf("squashfs: read extended file success, sparse=%d size=%d fragblock=%x", ino.Sparse, ino.Size, ino.FragBlock)
 	case 3: // basic symlink
 		err = binary.Read(r, sb.order, &ino.NLink)
 		if err != nil {
@@ -256,7 +327,7 @@ func (sb *Superblock) GetInodeRef(inor inodeRef) (*Inode, error) {
 		}
 		ino.SymTarget = buf
 
-		log.Printf("squashfs: read symlink to %s", ino.SymTarget)
+		//log.Printf("squashfs: read symlink to %s", ino.SymTarget)
 	default:
 		log.Printf("squashfs: unsupported inode type %d", ino.Type)
 		return ino, nil
@@ -267,7 +338,7 @@ func (sb *Superblock) GetInodeRef(inor inodeRef) (*Inode, error) {
 
 func (i *Inode) ReadAt(p []byte, off int64) (int, error) {
 	switch i.Type {
-	case 2: // Basic file
+	case 2, 9: // Basic file
 		//log.Printf("read request off=%d len=%d", off, len(p))
 
 		if uint64(off) >= i.Size {
