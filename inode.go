@@ -56,6 +56,8 @@ func (sb *Superblock) GetInode(ino uint64) (tpkgfs.Inode, error) {
 		return sb.GetInodeRef(inor)
 	}
 
+	// TODO locate inodeRef from the nfs export table
+
 	log.Printf("get inode WIP %d", ino)
 	return nil, os.ErrInvalid
 }

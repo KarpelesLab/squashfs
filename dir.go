@@ -66,6 +66,8 @@ func (dr *dirReader) next() (string, inodeRef, error) {
 		return "", 0, err
 	}
 
+	dr.count -= 1
+
 	inoRef := inodeRef((uint64(dr.startBlock) << 16) | uint64(offset))
 	return string(name), inoRef, nil
 }
