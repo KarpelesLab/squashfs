@@ -87,6 +87,7 @@ func (dr *dirReader) readHeader() error {
 		return err
 	}
 
+	//log.Printf("read header, count=0x%x+1 startBlock=%x inodeNum=%x", dr.count, dr.startBlock, dr.inodeNum)
 	dr.count += 1
 
 	return nil

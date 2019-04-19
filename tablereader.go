@@ -54,6 +54,7 @@ func (i *tableReader) readBlock() error {
 	if err != nil {
 		return err
 	}
+	i.offt += int64(lenN) + 2
 	if !nocompressFlag {
 		// decompress
 		buf, err = i.sb.Comp.decompress(buf)

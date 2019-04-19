@@ -28,6 +28,8 @@ type Inode struct {
 	Offset     uint32 // uint16 for directories
 	ParentIno  uint32 // for directories
 	SymTarget  []byte // The target path this symlink points to
+	IdxCount   uint16 // index count for advanced directories
+	XattrIdx   uint32 // xattr table index (if relevant)
 
 	// fragment
 	FragBlock uint32
@@ -131,6 +133,48 @@ func (sb *Superblock) GetInodeRef(inor inodeRef) (*Inode, error) {
 		}
 
 		log.Printf("squashfs: read basic directory success, parent=%d", ino.ParentIno)
+	case 8: // Extended dir
+		var u32 uint32
+		var u16 uint16
+
+		err = binary.Read(r, sb.order, &ino.NLink)
+		if err != nil {
+			return nil, err
+		}
+
+		err = binary.Read(r, sb.order, &u32)
+		if err != nil {
+			return nil, err
+		}
+		ino.Size = uint64(u32)
+
+		err = binary.Read(r, sb.order, &u32)
+		if err != nil {
+			return nil, err
+		}
+		ino.StartBlock = uint64(u32)
+
+		err = binary.Read(r, sb.order, &ino.ParentIno)
+		if err != nil {
+			return nil, err
+		}
+
+		err = binary.Read(r, sb.order, &ino.IdxCount)
+		if err != nil {
+			return nil, err
+		}
+
+		err = binary.Read(r, sb.order, &u16)
+		if err != nil {
+			return nil, err
+		}
+		ino.Offset = uint32(u16)
+
+		err = binary.Read(r, sb.order, &ino.XattrIdx)
+		if err != nil {
+			return nil, err
+		}
+		log.Printf("squashfs: read extended directory success, parent=%d indexes=%d size=%d", ino.ParentIno, ino.IdxCount, ino.Size)
 	case 2: // Basic file
 		var u32 uint32
 		err = binary.Read(r, sb.order, &u32)
@@ -336,7 +380,7 @@ func (i *Inode) ReadAt(p []byte, off int64) (int, error) {
 
 func (i *Inode) Lookup(name string) (uint64, error) {
 	switch i.Type {
-	case 1:
+	case 1, 8:
 		// basic dir, we need to iterate (cache data?)
 		dr, err := i.sb.dirReader(i)
 		if err != nil {
@@ -459,7 +503,7 @@ func (i *Inode) ReadDir(input *fuse.ReadIn, out *fuse.DirEntryList, plus bool) e
 	log.Printf("readdir offset %d", input.Offset)
 
 	switch i.Type {
-	case 1:
+	case 1, 8:
 		// basic dir
 		dr, err := i.sb.dirReader(i)
 		if err != nil {
