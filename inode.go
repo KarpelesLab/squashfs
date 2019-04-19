@@ -94,7 +94,7 @@ func (sb *Superblock) GetInodeRef(inor inodeRef) (*Inode, error) {
 		return nil, err
 	}
 
-	log.Printf("read inode #%d type=%d", ino.Ino, ino.Type)
+	//log.Printf("read inode #%d type=%d", ino.Ino, ino.Type)
 
 	switch ino.Type {
 	case 1: // Basic Directory
@@ -222,7 +222,7 @@ func (sb *Superblock) GetInodeRef(inor inodeRef) (*Inode, error) {
 func (i *Inode) ReadAt(p []byte, off int64) (int, error) {
 	switch i.Type {
 	case 2: // Basic file
-		log.Printf("read request off=%d len=%d", off, len(p))
+		//log.Printf("read request off=%d len=%d", off, len(p))
 
 		if uint64(off) >= i.Size {
 			// no read
