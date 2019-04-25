@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/hanwen/go-fuse/fuse"
@@ -39,6 +40,8 @@ type Inode struct {
 	// file blocks (some have value 0x1001000)
 	Blocks     []uint32
 	BlocksOfft []uint64
+
+	refcnt uint64 // for fuse
 }
 
 func (sb *Superblock) GetInode(ino uint64) (tpkgfs.Inode, error) {
@@ -655,4 +658,12 @@ func (i *Inode) ReadDir(input *fuse.ReadIn, out *fuse.DirEntryList, plus bool) e
 		}
 	}
 	return os.ErrInvalid
+}
+
+func (i *Inode) AddRef(count uint64) uint64 {
+	return atomic.AddUint64(&i.refcnt, count)
+}
+
+func (i *Inode) DelRef(count uint64) uint64 {
+	return atomic.AddUint64(&i.refcnt, ^(count - 1))
 }
