@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"sync"
 
-	"github.com/tardigradeos/tpkg/tpkgfs"
+	"git.atonline.com/azusa/apkg/apkgfs"
 )
 
 const SuperblockSize = 96
@@ -23,7 +23,7 @@ type Superblock struct {
 	inoIdx   map[uint32]inodeRef // inode refs (see export table)
 	inoIdxL  sync.RWMutex
 	inoOfft  uint64
-	fuse     *tpkgfs.PkgFS
+	fuse     *apkgfs.PkgFS
 
 	Magic             uint32
 	InodeCnt          uint32
@@ -46,7 +46,7 @@ type Superblock struct {
 	ExportTableStart  uint64
 }
 
-func New(fs io.ReaderAt, inoOfft uint64, fuse *tpkgfs.PkgFS) (*Superblock, error) {
+func New(fs io.ReaderAt, inoOfft uint64, fuse *apkgfs.PkgFS) (*Superblock, error) {
 	sb := &Superblock{fs: fs,
 		fuse:    fuse,
 		inoOfft: inoOfft,

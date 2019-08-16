@@ -9,8 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"git.atonline.com/azusa/apkg/apkgfs"
 	"github.com/hanwen/go-fuse/fuse"
-	"github.com/tardigradeos/tpkg/tpkgfs"
 )
 
 type Inode struct {
@@ -44,7 +44,7 @@ type Inode struct {
 	refcnt uint64 // for fuse
 }
 
-func (sb *Superblock) GetInode(ino uint64) (tpkgfs.Inode, error) {
+func (sb *Superblock) GetInode(ino uint64) (apkgfs.Inode, error) {
 	if ino == 1 {
 		// get root inode
 		return sb.rootIno, nil
@@ -521,7 +521,7 @@ func (i *Inode) IsDir() bool {
 func (i *Inode) FillAttr(attr *fuse.Attr) error {
 	attr.Size = i.Size
 	attr.Blocks = 1
-	attr.Mode = tpkgfs.ModeToUnix(i.Mode())
+	attr.Mode = apkgfs.ModeToUnix(i.Mode())
 	attr.Nlink = i.NLink // 1 required
 	attr.Rdev = 1
 	attr.Blksize = i.sb.BlockSize
