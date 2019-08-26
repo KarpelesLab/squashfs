@@ -574,7 +574,7 @@ func (i *Inode) fillEntry(entry *fuse.EntryOut) {
 
 func (i *Inode) ReadDir(input *fuse.ReadIn, out *fuse.DirEntryList, plus bool) error {
 	pos := input.Offset + 1
-	log.Printf("readdir offset %d", input.Offset)
+	//log.Printf("readdir offset %d", input.Offset)
 
 	switch i.Type {
 	case 1, 8:
