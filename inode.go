@@ -364,7 +364,7 @@ func (i *Inode) ReadAt(p []byte, off int64) (int, error) {
 			// read block
 			if i.Blocks[block] == 0xffffffff {
 				// this is a fragment, need to decode fragment
-				log.Printf("frag table offset=%d", i.sb.FragTableStart)
+				//log.Printf("frag table offset=%d", i.sb.FragTableStart)
 
 				// read table offset
 				sub := int64(i.FragBlock) / 512 * 8
