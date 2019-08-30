@@ -539,16 +539,16 @@ func (i *Inode) Readlink() ([]byte, error) {
 	return nil, os.ErrInvalid
 }
 
-func (i *Inode) Open(flags uint32) error {
+func (i *Inode) Open(flags uint32) (uint32, error) {
 	// ok :)
-	return nil
+	return fuse.FOPEN_KEEP_CACHE, nil
 }
 
-func (i *Inode) OpenDir() error {
+func (i *Inode) OpenDir() (uint32, error) {
 	if i.IsDir() {
-		return nil
+		return fuse.FOPEN_KEEP_CACHE, nil
 	}
-	return os.ErrInvalid
+	return 0, os.ErrInvalid
 }
 
 func (i *Inode) publicInodeNum() uint64 {
