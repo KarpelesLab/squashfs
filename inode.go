@@ -409,6 +409,9 @@ func (i *Inode) ReadAt(p []byte, off int64) (int, error) {
 				if i.FragOfft != 0 {
 					buf = buf[i.FragOfft:]
 				}
+			} else if i.Blocks[block] == 0 {
+				// this part of the file contains only zeroes
+				buf = make([]byte, i.sb.BlockSize)
 			} else {
 				buf = make([]byte, i.Blocks[block]&0xfffff)
 				_, err := i.sb.fs.ReadAt(buf, int64(i.StartBlock+i.BlocksOfft[block]))
