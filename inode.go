@@ -492,7 +492,7 @@ func (i *Inode) Lookup(name string) (uint64, error) {
 }
 
 func (i *Inode) Mode() os.FileMode {
-	res := os.FileMode(i.Perm)
+	res := apkgfs.UnixToMode(uint32(i.Perm))
 	switch i.Type {
 	case 1, 8: // Dir
 		res |= os.ModeDir
