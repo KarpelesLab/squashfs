@@ -393,17 +393,27 @@ func (i *Inode) ReadAt(p []byte, off int64) (int, error) {
 				}
 
 				//log.Printf("fragment at %d:%d => start=0x%x (size=0x%x) len=%d", i.FragBlock, i.FragOfft, start, size, len(p))
-				// read fragment
-				buf = make([]byte, size)
-				_, err = i.sb.fs.ReadAt(buf, int64(start))
-				if err != nil {
-					return n, err
-				}
 
-				// decompress
-				buf, err = i.sb.Comp.decompress(buf)
-				if err != nil {
-					return n, err
+				if size&0x1000000 == 0x1000000 {
+					// no compression
+					buf = make([]byte, size&(0x1000000-1))
+					_, err = i.sb.fs.ReadAt(buf, int64(start))
+					if err != nil {
+						return n, err
+					}
+				} else {
+					// read fragment
+					buf = make([]byte, size)
+					_, err = i.sb.fs.ReadAt(buf, int64(start))
+					if err != nil {
+						return n, err
+					}
+
+					// decompress
+					buf, err = i.sb.Comp.decompress(buf)
+					if err != nil {
+						return n, err
+					}
 				}
 
 				if i.FragOfft != 0 {
