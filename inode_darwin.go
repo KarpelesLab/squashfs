@@ -2,7 +2,7 @@ package squashfs
 
 import (
 	"git.atonline.com/azusa/apkg/apkgfs"
-	"github.com/MagicalTux/go-fuse/fuse"
+	"github.com/hanwen/go-fuse/v2/fuse"
 )
 
 func (i *Inode) FillAttr(attr *fuse.Attr) error {
