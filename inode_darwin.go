@@ -7,7 +7,7 @@ import (
 
 func (i *Inode) FillAttr(attr *fuse.Attr) error {
 	attr.Size = i.Size
-	attr.Blocks = uint64(len(i.Blocks))
+	attr.Blocks = uint64(len(i.Blocks)) + 1
 	attr.Mode = apkgfs.ModeToUnix(i.Mode())
 	attr.Nlink = i.NLink // 1 required
 	attr.Rdev = 1
