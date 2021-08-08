@@ -20,6 +20,7 @@ type Superblock struct {
 	inoIdx   map[uint32]inodeRef // inode refs (see export table)
 	inoIdxL  sync.RWMutex
 	inoOfft  uint64
+	idTable  []uint32
 
 	Magic             uint32
 	InodeCnt          uint32
@@ -74,7 +75,28 @@ func New(fs io.ReaderAt, inoOfft uint64) (*Superblock, error) {
 
 	sb.rootInoN = uint64(sb.rootIno.Ino)
 
+	sb.readIdTable()
+
 	return sb, nil
+}
+
+func (sb *Superblock) readIdTable() error {
+	// read id table
+	idtable, err := sb.newIndirectTableReader(int64(sb.IdTableStart), 0)
+	if err != nil {
+		return err
+	}
+	var id uint32
+	sb.idTable = make([]uint32, sb.IdCount)
+	for i := range sb.idTable {
+		err := binary.Read(idtable, sb.order, &id)
+		if err != nil {
+			return err
+		}
+		sb.idTable[i] = id
+	}
+	//log.Printf("sqashfs: id table = %+v", sb.idTable)
+	return nil
 }
 
 func (s *Superblock) UnmarshalBinary(data []byte) error {

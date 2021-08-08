@@ -4,9 +4,10 @@ import "log"
 
 // TODO add buf cache to allow multiple accesses to same block without re-reading
 type tableReader struct {
-	sb   *Superblock
-	buf  []byte
-	offt int64
+	sb    *Superblock
+	buf   []byte
+	offt  int64
+	tofft int64 // position of table block list (when blocks aren't one after another)
 }
 
 func (sb *Superblock) newInodeReader(ino inodeRef) (*tableReader, error) {
@@ -32,7 +33,35 @@ func (sb *Superblock) newTableReader(base int64, start int) (*tableReader, error
 	return ir, nil
 }
 
+func (sb *Superblock) newIndirectTableReader(base int64, start int) (*tableReader, error) {
+	ir := &tableReader{
+		sb:    sb,
+		tofft: base,
+	}
+
+	err := ir.readBlock()
+	if err != nil {
+		return nil, err
+	}
+
+	if start != 0 {
+		// need to cut offset
+		ir.buf = ir.buf[start:]
+	}
+
+	return ir, nil
+}
+
 func (i *tableReader) readBlock() error {
+	if i.tofft != 0 {
+		// tofft mode
+		buf := make([]byte, 8)
+		_, err := i.sb.fs.ReadAt(buf, i.tofft)
+		if err != nil {
+			return err
+		}
+		i.offt = int64(i.sb.order.Uint64(buf))
+	}
 	buf := make([]byte, 2)
 	_, err := i.sb.fs.ReadAt(buf, i.offt)
 	if err != nil {
