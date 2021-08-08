@@ -14,6 +14,9 @@ import (
 )
 
 type Inode struct {
+	// refcnt is first value to get guaranteed 64bits alignment, if not sync/atomic will panic
+	refcnt uint64 // for fuse
+
 	sb *Superblock
 
 	Type    uint16
@@ -40,8 +43,6 @@ type Inode struct {
 	// file blocks (some have value 0x1001000)
 	Blocks     []uint32
 	BlocksOfft []uint64
-
-	refcnt uint64 // for fuse
 }
 
 func (sb *Superblock) GetInode(ino uint64) (apkgfs.Inode, error) {
