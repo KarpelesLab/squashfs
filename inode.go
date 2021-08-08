@@ -1,6 +1,7 @@
 package squashfs
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -466,7 +467,7 @@ func (i *Inode) ReadAt(p []byte, off int64) (int, error) {
 	return 0, os.ErrInvalid
 }
 
-func (i *Inode) Lookup(name string) (uint64, error) {
+func (i *Inode) Lookup(ctx context.Context, name string) (uint64, error) {
 	switch i.Type {
 	case 1, 8:
 		// basic dir, we need to iterate (cache data?)
