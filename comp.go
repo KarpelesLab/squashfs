@@ -3,7 +3,6 @@ package squashfs
 import (
 	"bytes"
 	"compress/zlib"
-	"errors"
 	"fmt"
 	"io"
 )
@@ -52,5 +51,5 @@ func (s SquashComp) decompress(buf []byte) ([]byte, error) {
 		r.Close()
 		return b.Bytes(), nil
 	}
-	return nil, errors.New("unsupported compression format")
+	return nil, fmt.Errorf("unsupported compression format %s", s.String())
 }
