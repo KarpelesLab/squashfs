@@ -158,3 +158,7 @@ func (s *Superblock) binarySize() int {
 	}
 	return int(sz)
 }
+
+func (s *Superblock) SetInodeOffset(offt uint64) {
+	s.inoOfft = offt
+}
