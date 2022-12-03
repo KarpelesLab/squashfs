@@ -1,9 +1,12 @@
 package squashfs
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"io"
+	"io/fs"
+	"path"
 	"reflect"
 	"sync"
 )
@@ -42,6 +45,10 @@ type Superblock struct {
 	FragTableStart    uint64
 	ExportTableStart  uint64
 }
+
+var _ fs.FS = (*Superblock)(nil)
+var _ fs.ReadDirFS = (*Superblock)(nil)
+var _ fs.StatFS = (*Superblock)(nil)
 
 func New(fs io.ReaderAt, inoOfft uint64) (*Superblock, error) {
 	sb := &Superblock{fs: fs,
@@ -161,4 +168,44 @@ func (s *Superblock) binarySize() int {
 
 func (s *Superblock) SetInodeOffset(offt uint64) {
 	s.inoOfft = offt
+}
+
+func (sb *Superblock) Open(name string) (fs.File, error) {
+	ino, err := sb.rootIno.LookupRelativeInodePath(context.Background(), name)
+	if err != nil {
+		return nil, err
+	}
+
+	return ino.OpenFile(path.Base(name)), nil
+}
+
+func (sb *Superblock) ReadDir(name string) ([]fs.DirEntry, error) {
+	ino, err := sb.rootIno.LookupRelativeInodePath(context.Background(), name)
+	if err != nil {
+		return nil, err
+	}
+
+	switch ino.Type {
+	case 1, 8:
+		// basic dir, we need to iterate (cache data?)
+		dr, err := sb.dirReader(ino)
+		if err != nil {
+			return nil, err
+		}
+		return dr.ReadDir(0)
+	default:
+		return nil, fs.ErrInvalid
+	}
+}
+
+func (sb *Superblock) Stat(name string) (fs.FileInfo, error) {
+	ino, err := sb.rootIno.LookupRelativeInodePath(context.Background(), name)
+	if err != nil {
+		return nil, err
+	}
+
+	return &fileinfo{
+		name: path.Base(name),
+		ino:  ino,
+	}, nil
 }

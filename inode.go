@@ -5,12 +5,13 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"io/fs"
 	"log"
 	"os"
+	"strings"
 	"sync/atomic"
 	"time"
 
-	"git.atonline.com/azusa/apkg/apkgfs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 )
 
@@ -46,7 +47,7 @@ type Inode struct {
 	BlocksOfft []uint64
 }
 
-func (sb *Superblock) GetInode(ino uint64) (apkgfs.Inode, error) {
+func (sb *Superblock) GetInode(ino uint64) (*Inode, error) {
 	if ino == 1 {
 		// get root inode
 		return sb.rootIno, nil
@@ -468,43 +469,80 @@ func (i *Inode) ReadAt(p []byte, off int64) (int, error) {
 }
 
 func (i *Inode) Lookup(ctx context.Context, name string) (uint64, error) {
+	res, err := i.LookupRelativeInode(ctx, name)
+	if err != nil {
+		return 0, err
+	}
+	return res.publicInodeNum(), nil
+}
+
+func (i *Inode) LookupRelativeInode(ctx context.Context, name string) (*Inode, error) {
 	switch i.Type {
 	case 1, 8:
 		// basic dir, we need to iterate (cache data?)
 		dr, err := i.sb.dirReader(i)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		for {
 			ename, inoR, err := dr.next()
 			if err != nil {
 				if err == io.EOF {
-					return 0, os.ErrNotExist
+					return nil, os.ErrNotExist
 				}
-				return 0, err
+				return nil, err
 			}
 
 			if name == ename {
 				// found
 				found, err := i.sb.GetInodeRef(inoR)
 				if err != nil {
-					return 0, err
+					return nil, err
 				}
 				// cache
 				i.sb.inoIdxL.Lock()
 				i.sb.inoIdx[found.Ino] = inoR
 				i.sb.inoIdxL.Unlock()
 				// return
-				return found.publicInodeNum(), nil
+				return found, nil
 			}
 		}
 	}
 	log.Printf("squashfs: lookup name %s from inode %d TODO", name, i.Ino)
-	return 0, os.ErrInvalid
+	return nil, os.ErrInvalid
 }
 
-func (i *Inode) Mode() os.FileMode {
-	res := apkgfs.UnixToMode(uint32(i.Perm))
+func (i *Inode) LookupRelativeInodePath(ctx context.Context, name string) (*Inode, error) {
+	// similar to lookup, but handles slashes in name and returns an inode
+	cur := i
+
+	for {
+		if len(name) == 0 {
+			// trailing slash?
+			return cur, nil
+		}
+		pos := strings.IndexByte(name, '/')
+		if pos == -1 {
+			// no /
+			return cur.LookupRelativeInode(ctx, name)
+		}
+		if pos == 0 {
+			// skip initial /
+			name = name[1:]
+			continue
+		}
+		t, err := cur.LookupRelativeInode(ctx, name[:pos])
+		if err != nil {
+			return nil, err
+		}
+		// found an inode
+		cur = t
+		name = name[pos+1:]
+	}
+}
+
+func (i *Inode) Mode() fs.FileMode {
+	res := UnixToMode(uint32(i.Perm))
 	switch i.Type {
 	case 1, 8: // Dir
 		res |= os.ModeDir

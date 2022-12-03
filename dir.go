@@ -3,6 +3,7 @@ package squashfs
 import (
 	"encoding/binary"
 	"io"
+	"io/fs"
 )
 
 type dirReader struct {
@@ -91,4 +92,34 @@ func (dr *dirReader) readHeader() error {
 	dr.count += 1
 
 	return nil
+}
+
+func (dr *dirReader) ReadDir(n int) ([]fs.DirEntry, error) {
+	var res []fs.DirEntry
+
+	for {
+		ename, inoR, err := dr.next()
+		if err != nil {
+			if err == io.EOF {
+				return res, nil
+			}
+			return res, err
+		}
+
+		// found
+		found, err := dr.sb.GetInodeRef(inoR)
+		if err != nil {
+			return res, err
+		}
+		// cache
+		dr.sb.inoIdxL.Lock()
+		dr.sb.inoIdx[found.Ino] = inoR
+		dr.sb.inoIdxL.Unlock()
+		// append
+		res = append(res, fs.FileInfoToDirEntry(&fileinfo{name: ename, ino: found}))
+
+		if n > 0 && len(res) >= n {
+			return res, nil
+		}
+	}
 }
