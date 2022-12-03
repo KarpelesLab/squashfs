@@ -171,6 +171,10 @@ func (s *Superblock) SetInodeOffset(offt uint64) {
 }
 
 func (sb *Superblock) Open(name string) (fs.File, error) {
+	if !fs.ValidPath(name) {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrInvalid}
+	}
+
 	ino, err := sb.rootIno.LookupRelativeInodePath(context.Background(), name)
 	if err != nil {
 		return nil, err
@@ -180,6 +184,10 @@ func (sb *Superblock) Open(name string) (fs.File, error) {
 }
 
 func (sb *Superblock) ReadDir(name string) ([]fs.DirEntry, error) {
+	if !fs.ValidPath(name) {
+		return nil, &fs.PathError{Op: "readdir", Path: name, Err: fs.ErrInvalid}
+	}
+
 	ino, err := sb.rootIno.LookupRelativeInodePath(context.Background(), name)
 	if err != nil {
 		return nil, err
@@ -199,13 +207,14 @@ func (sb *Superblock) ReadDir(name string) ([]fs.DirEntry, error) {
 }
 
 func (sb *Superblock) Stat(name string) (fs.FileInfo, error) {
+	if !fs.ValidPath(name) {
+		return nil, &fs.PathError{Op: "stat", Path: name, Err: fs.ErrInvalid}
+	}
+
 	ino, err := sb.rootIno.LookupRelativeInodePath(context.Background(), name)
 	if err != nil {
 		return nil, err
 	}
 
-	return &fileinfo{
-		name: path.Base(name),
-		ino:  ino,
-	}, nil
+	return &fileinfo{name: path.Base(name), ino: ino}, nil
 }
