@@ -177,10 +177,27 @@ func (sb *Superblock) Open(name string) (fs.File, error) {
 
 	ino, err := sb.rootIno.LookupRelativeInodePath(context.Background(), name)
 	if err != nil {
-		return nil, err
+		return nil, &fs.PathError{Op: "open", Path: name, Err: err}
 	}
 
 	return ino.OpenFile(path.Base(name)), nil
+}
+
+func (sb *Superblock) Readlink(name string) (string, error) {
+	if !fs.ValidPath(name) {
+		return "", &fs.PathError{Op: "readlink", Path: name, Err: fs.ErrInvalid}
+	}
+
+	ino, err := sb.rootIno.LookupRelativeInodePath(context.Background(), name)
+	if err != nil {
+		return "", &fs.PathError{Op: "readlink", Path: name, Err: err}
+	}
+
+	res, err := ino.Readlink()
+	if err != nil {
+		return "", &fs.PathError{Op: "readlink", Path: name, Err: err}
+	}
+	return string(res), nil
 }
 
 func (sb *Superblock) ReadDir(name string) ([]fs.DirEntry, error) {
@@ -190,7 +207,7 @@ func (sb *Superblock) ReadDir(name string) ([]fs.DirEntry, error) {
 
 	ino, err := sb.rootIno.LookupRelativeInodePath(context.Background(), name)
 	if err != nil {
-		return nil, err
+		return nil, &fs.PathError{Op: "readdir", Path: name, Err: err}
 	}
 
 	switch ino.Type {

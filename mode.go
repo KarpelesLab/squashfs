@@ -1,7 +1,7 @@
 package squashfs
 
 import (
-	"os"
+	"io/fs"
 )
 
 // squashfs internal modes are based on linux, so use these methods:
@@ -34,71 +34,71 @@ const (
 	S_IXOTH = 0x1
 )
 
-func UnixToMode(mode uint32) os.FileMode {
-	res := os.FileMode(mode & 0777)
+func UnixToMode(mode uint32) fs.FileMode {
+	res := fs.FileMode(mode & 0777)
 
 	switch {
 	case mode&S_IFCHR == S_IFCHR:
-		res |= os.ModeCharDevice
+		res |= fs.ModeCharDevice
 	case mode&S_IFBLK == S_IFBLK:
-		res |= os.ModeDevice
+		res |= fs.ModeDevice
 	case mode&S_IFDIR == S_IFDIR:
-		res |= os.ModeDir
+		res |= fs.ModeDir
 	case mode&S_IFIFO == S_IFIFO:
-		res |= os.ModeNamedPipe
+		res |= fs.ModeNamedPipe
 	case mode&S_IFLNK == S_IFLNK:
-		res |= os.ModeSymlink
+		res |= fs.ModeSymlink
 	case mode&S_IFSOCK == S_IFSOCK:
-		res |= os.ModeSocket
+		res |= fs.ModeSocket
 	}
 
 	// extra flags
 	if mode&S_ISGID == S_ISGID {
-		res |= os.ModeSetgid
+		res |= fs.ModeSetgid
 	}
 
 	if mode&S_ISUID == S_ISUID {
-		res |= os.ModeSetuid
+		res |= fs.ModeSetuid
 	}
 
 	if mode&S_ISVTX == S_ISVTX {
-		res |= os.ModeSticky
+		res |= fs.ModeSticky
 	}
 
 	return res
 }
 
-func ModeToUnix(mode os.FileMode) uint32 {
+func ModeToUnix(mode fs.FileMode) uint32 {
 	res := uint32(mode.Perm())
 
 	// type of file
 	switch {
-	case mode&os.ModeCharDevice == os.ModeCharDevice:
+	case mode&fs.ModeCharDevice == fs.ModeCharDevice:
 		res |= S_IFCHR
-	case mode&os.ModeDevice == os.ModeDevice:
+	case mode&fs.ModeDevice == fs.ModeDevice:
 		res |= S_IFBLK
-	case mode&os.ModeDir == os.ModeDir:
+	case mode&fs.ModeDir == fs.ModeDir:
 		res |= S_IFDIR
-	case mode&os.ModeNamedPipe == os.ModeNamedPipe:
+	case mode&fs.ModeNamedPipe == fs.ModeNamedPipe:
 		res |= S_IFIFO
-	case mode&os.ModeSymlink == os.ModeSymlink:
+	case mode&fs.ModeSymlink == fs.ModeSymlink:
 		res |= S_IFLNK
-	case mode&os.ModeSocket == os.ModeSocket:
+	case mode&fs.ModeSocket == fs.ModeSocket:
 		res |= S_IFSOCK
 	default:
 		res |= S_IFREG
 	}
 
 	// extra flags
-	if mode&os.ModeSetgid == os.ModeSetgid {
+	if mode&fs.ModeSetgid == fs.ModeSetgid {
 		res |= S_ISGID
 	}
 
-	if mode&os.ModeSetuid == os.ModeSetuid {
+	if mode&fs.ModeSetuid == fs.ModeSetuid {
 		res |= S_ISUID
 	}
 
-	if mode&os.ModeSticky == os.ModeSticky {
+	if mode&fs.ModeSticky == fs.ModeSticky {
 		res |= S_ISVTX
 	}
 
