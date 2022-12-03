@@ -349,7 +349,7 @@ func (i *Inode) ReadAt(p []byte, off int64) (int, error) {
 
 		if uint64(off) >= i.Size {
 			// no read
-			return 0, nil
+			return 0, io.EOF
 		}
 
 		if uint64(off+int64(len(p))) > i.Size {
@@ -465,7 +465,7 @@ func (i *Inode) ReadAt(p []byte, off int64) (int, error) {
 
 		log.Printf("load at block=%d offset=%d", block, offset)
 	}
-	return 0, os.ErrInvalid
+	return 0, fs.ErrInvalid
 }
 
 func (i *Inode) Lookup(ctx context.Context, name string) (uint64, error) {
