@@ -48,24 +48,39 @@ func (ino *Inode) OpenFile(name string) fs.File {
 
 // (File)
 
+// Stat returns the details of the open file
 func (f *File) Stat() (fs.FileInfo, error) {
 	return &fileinfo{name: path.Base(f.name), ino: f.ino}, nil
 }
 
+// Sys returns a *Inode object for this file
+func (f *File) Sys() any {
+	return f.ino
+}
+
+// Close actually does nothing and exists to comply with fs.File
 func (f *File) Close() error {
 	return nil
 }
 
 // (FileDir)
 
+// Read on a directory is invalid and will always fail
 func (d *FileDir) Read(p []byte) (int, error) {
 	return 0, fs.ErrInvalid
 }
 
+// Stat returns details on the file
 func (d *FileDir) Stat() (fs.FileInfo, error) {
 	return &fileinfo{name: path.Base(d.name), ino: d.ino}, nil
 }
 
+// Sys returns a *inode object for this file, similar to calling Stat().Sys()
+func (d *FileDir) Sys() any {
+	return d.ino
+}
+
+// Close resets the dir reader
 func (d *FileDir) Close() error {
 	d.r = nil
 	return nil
@@ -85,26 +100,33 @@ func (d *FileDir) ReadDir(n int) ([]fs.DirEntry, error) {
 
 // (fileinfo)
 
+// Name returns the file's base name
 func (fi *fileinfo) Name() string {
 	return fi.name
 }
 
+// Size returns the file's size
 func (fi *fileinfo) Size() int64 {
 	return int64(fi.ino.Size)
 }
 
+// Mode returns the file's mode
 func (fi *fileinfo) Mode() fs.FileMode {
 	return fi.ino.Mode()
 }
 
+// ModTime returns the file's latest modified time. Note that squashfs stores
+// this as a int32, which means it'll stop working after 2038.
 func (fi *fileinfo) ModTime() time.Time {
 	return time.Unix(int64(fi.ino.ModTime), 0)
 }
 
+// IsDir returns true if this is a directory
 func (fi *fileinfo) IsDir() bool {
 	return fi.ino.IsDir()
 }
 
+// Sys returns the *Inode object matching this file
 func (fi *fileinfo) Sys() any {
 	return fi.ino
 }

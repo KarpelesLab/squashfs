@@ -1,13 +1,11 @@
 package squashfs
 
 import (
-	"context"
 	"encoding/binary"
 	"errors"
 	"io"
 	"io/fs"
 	"log"
-	"strings"
 	"sync/atomic"
 )
 
@@ -17,7 +15,7 @@ type Inode struct {
 
 	sb *Superblock
 
-	Type    uint16
+	Type    Type
 	Perm    uint16
 	UidIdx  uint16
 	GidIdx  uint16
@@ -479,7 +477,9 @@ func (i *Inode) ReadAt(p []byte, off int64) (int, error) {
 	return 0, fs.ErrInvalid
 }
 
-func (i *Inode) LookupRelativeInode(ctx context.Context, name string) (*Inode, error) {
+// lookupRelativeInode finds the given inode in the directory
+func (i *Inode) lookupRelativeInode(name string) (*Inode, error) {
+	// TODO: handle indexes
 	switch i.Type {
 	case 1, 8:
 		// basic dir, we need to iterate (cache data?)
@@ -497,55 +497,27 @@ func (i *Inode) LookupRelativeInode(ctx context.Context, name string) (*Inode, e
 			}
 
 			if name == ename {
-				// found
+				// found, load the inode from its ref
 				found, err := i.sb.GetInodeRef(inoR)
 				if err != nil {
 					return nil, err
 				}
-				// cache
+				// cache info
 				i.sb.setInodeRefCache(found.Ino, inoR)
 				// return
 				return found, nil
 			}
 		}
 	}
-	log.Printf("squashfs: lookup name %s from inode %d TODO", name, i.Ino)
 	return nil, fs.ErrInvalid
 }
 
-func (i *Inode) LookupRelativeInodePath(ctx context.Context, name string) (*Inode, error) {
-	// similar to lookup, but handles slashes in name and returns an inode
-	cur := i
-
-	for {
-		if len(name) == 0 {
-			// trailing slash?
-			return cur, nil
-		}
-		pos := strings.IndexByte(name, '/')
-		if pos == -1 {
-			// no /
-			return cur.LookupRelativeInode(ctx, name)
-		}
-		if pos == 0 {
-			// skip initial /
-			name = name[1:]
-			continue
-		}
-		t, err := cur.LookupRelativeInode(ctx, name[:pos])
-		if err != nil {
-			return nil, err
-		}
-		// found an inode
-		cur = t
-		name = name[pos+1:]
-	}
-}
-
+// Mode returns the inode's mode as fs.FileMode
 func (i *Inode) Mode() fs.FileMode {
-	return unixToMode(uint32(i.Perm)) | squashfsTypeToMode(i.Type)
+	return unixToMode(uint32(i.Perm)) | i.Type.Mode()
 }
 
+// IsDir returns true if the inode is a directory inode.
 func (i *Inode) IsDir() bool {
 	switch i.Type {
 	case 1, 8:
@@ -554,6 +526,7 @@ func (i *Inode) IsDir() bool {
 	return false
 }
 
+// Readlink returns the inode's link
 func (i *Inode) Readlink() ([]byte, error) {
 	switch i.Type {
 	case 3, 10:
@@ -562,10 +535,30 @@ func (i *Inode) Readlink() ([]byte, error) {
 	return nil, fs.ErrInvalid
 }
 
+// AddRef atomatically increments the inode's refcount and returns the new value. This is mainly useful when
+// using fuse and can be safely ignored.
 func (i *Inode) AddRef(count uint64) uint64 {
 	return atomic.AddUint64(&i.refcnt, count)
 }
 
+// DelRef atomatically decrements the inode's refcount and returns the new value. This is mainly useful when
+// using fuse and can be safely ignored.
 func (i *Inode) DelRef(count uint64) uint64 {
 	return atomic.AddUint64(&i.refcnt, ^(count - 1))
+}
+
+// GetUid returns inode's owner uid, or zero if an error happens
+func (i *Inode) GetUid() uint32 {
+	if len(i.sb.idTable) >= int(i.UidIdx) {
+		return i.sb.idTable[i.UidIdx]
+	}
+	return 0
+}
+
+// GetGid returns inode's group id, or zero if an error happens
+func (i *Inode) GetGid() uint32 {
+	if len(i.sb.idTable) >= int(i.GidIdx) {
+		return i.sb.idTable[i.GidIdx]
+	}
+	return 0
 }

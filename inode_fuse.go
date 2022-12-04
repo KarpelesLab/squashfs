@@ -13,7 +13,7 @@ import (
 )
 
 func (i *Inode) Lookup(ctx context.Context, name string) (uint64, error) {
-	res, err := i.LookupRelativeInode(ctx, name)
+	res, err := i.lookupRelativeInode(name)
 	if err != nil {
 		return 0, err
 	}

@@ -1,7 +1,6 @@
 package squashfs
 
 import (
-	"context"
 	"encoding/binary"
 	"io"
 	"io/fs"
@@ -9,6 +8,7 @@ import (
 	"path"
 	"reflect"
 	"runtime"
+	"strings"
 	"sync"
 )
 
@@ -112,7 +112,7 @@ func Open(file string, options ...Option) (*Superblock, error) {
 	clean := func(sb *Superblock) {
 		sb.Close()
 	}
-	runtime.SetFinalizer(f, clean)
+	runtime.SetFinalizer(sb, clean)
 	return sb, nil
 }
 
@@ -206,6 +206,96 @@ func (s *Superblock) SetInodeOffset(offt uint64) {
 	s.inoOfft = offt
 }
 
+// FindInode returns the inode for a given path. If followSymlink is false and
+// a symlink is found in the path, it will be followed anyway. If however the
+// target file is a symlink, then its inode will be returned.
+func (s *Superblock) FindInode(name string, followSymlinks bool) (*Inode, error) {
+	return s.FindInodeAt(s.rootIno, name, followSymlinks)
+}
+
+func (s *Superblock) FindInodeAt(cur *Inode, name string, followSymlinks bool) (*Inode, error) {
+	// similar to lookup, but handles slashes in name and returns an inode
+	parent := cur
+	symlinkRedirects := 40 // maximum number of redirects before giving up
+
+	for {
+		if len(name) == 0 {
+			// trailing slash?
+			return cur, nil
+		}
+		pos := strings.IndexByte(name, '/')
+		if pos == -1 {
+			// no / - perform final lookup
+			if !followSymlinks {
+				return cur.lookupRelativeInode(name)
+			}
+			res, err := cur.lookupRelativeInode(name)
+			if err != nil {
+				return nil, err
+			}
+			if !res.Type.IsSymlink() {
+				return res, nil
+			}
+
+			// need to perform symlink lookup, we are not done here
+			if symlinkRedirects == 0 {
+				return nil, ErrTooManySymlinks
+			}
+			symlinkRedirects -= 1
+			sym, err := res.Readlink()
+			if err != nil {
+				return nil, err
+			}
+			// ensure symlink isn't empty and isn't absolute either
+			if len(sym) == 0 || sym[0] == '/' {
+				return nil, fs.ErrInvalid
+			}
+			// continue lookup from that point
+			cur = parent
+			name = string(sym)
+			continue
+		}
+		if pos == 0 {
+			// skip initial or subsequent /
+			name = name[1:]
+			continue
+		}
+		if !cur.IsDir() {
+			return nil, ErrNotDirectory
+		}
+		t, err := cur.lookupRelativeInode(name[:pos])
+		if err != nil {
+			return nil, err
+		}
+
+		if t.Type.IsSymlink() {
+			if symlinkRedirects == 0 {
+				return nil, ErrTooManySymlinks
+			}
+			symlinkRedirects -= 1
+
+			sym, err := t.Readlink()
+			if err != nil {
+				return nil, err
+			}
+			// ensure symlink isn't empty and isn't absolute either
+			if len(sym) == 0 || sym[0] == '/' {
+				return nil, fs.ErrInvalid
+			}
+			// prepend symlink to name & remove symlink
+			// if symlink a=b and name=a/c it becomes b/c
+			name = string(sym) + name[pos:] // no +1 to pos means we keep the / we had in name
+			// do not update cur since lookup resumes from that point
+			continue
+		}
+
+		// move forward
+		parent = cur
+		cur = t
+		name = name[pos+1:]
+	}
+}
+
 // Open returns a fs.File for a given path, which can be a different object depending
 // if the file is a regular file or a directory.
 func (sb *Superblock) Open(name string) (fs.File, error) {
@@ -213,7 +303,7 @@ func (sb *Superblock) Open(name string) (fs.File, error) {
 		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrInvalid}
 	}
 
-	ino, err := sb.rootIno.LookupRelativeInodePath(context.Background(), name)
+	ino, err := sb.FindInode(name, true)
 	if err != nil {
 		return nil, &fs.PathError{Op: "open", Path: name, Err: err}
 	}
@@ -227,7 +317,7 @@ func (sb *Superblock) Readlink(name string) (string, error) {
 		return "", &fs.PathError{Op: "readlink", Path: name, Err: fs.ErrInvalid}
 	}
 
-	ino, err := sb.rootIno.LookupRelativeInodePath(context.Background(), name)
+	ino, err := sb.FindInode(name, true)
 	if err != nil {
 		return "", &fs.PathError{Op: "readlink", Path: name, Err: err}
 	}
@@ -245,7 +335,7 @@ func (sb *Superblock) ReadDir(name string) ([]fs.DirEntry, error) {
 		return nil, &fs.PathError{Op: "readdir", Path: name, Err: fs.ErrInvalid}
 	}
 
-	ino, err := sb.rootIno.LookupRelativeInodePath(context.Background(), name)
+	ino, err := sb.FindInode(name, true)
 	if err != nil {
 		return nil, &fs.PathError{Op: "readdir", Path: name, Err: err}
 	}
@@ -269,7 +359,20 @@ func (sb *Superblock) Stat(name string) (fs.FileInfo, error) {
 		return nil, &fs.PathError{Op: "stat", Path: name, Err: fs.ErrInvalid}
 	}
 
-	ino, err := sb.rootIno.LookupRelativeInodePath(context.Background(), name)
+	ino, err := sb.FindInode(name, true)
+	if err != nil {
+		return nil, err
+	}
+
+	return &fileinfo{name: path.Base(name), ino: ino}, nil
+}
+
+func (sb *Superblock) Lstat(name string) (fs.FileInfo, error) {
+	if !fs.ValidPath(name) {
+		return nil, &fs.PathError{Op: "lstat", Path: name, Err: fs.ErrInvalid}
+	}
+
+	ino, err := sb.FindInode(name, false)
 	if err != nil {
 		return nil, err
 	}

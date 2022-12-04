@@ -15,7 +15,7 @@ type dirReader struct {
 
 type direntry struct {
 	name string
-	typ  uint16 // squashfs type
+	typ  Type // squashfs type
 	inoR inodeRef
 	sb   *Superblock
 }
@@ -39,13 +39,14 @@ func (dr *dirReader) next() (string, inodeRef, error) {
 	return name, inoR, err
 }
 
-func (dr *dirReader) nextfull() (string, uint16, inodeRef, error) {
+func (dr *dirReader) nextfull() (string, Type, inodeRef, error) {
 	// read next entry
 	if dr.r.N == 3 {
 		return "", 0, 0, io.EOF // probably
 	}
 
-	var offset, typ, siz uint16
+	var offset, siz uint16
+	var typ Type
 	var inoNum2 int16
 	var name []byte
 
@@ -139,7 +140,7 @@ func (de *direntry) IsDir() bool {
 }
 
 func (de *direntry) Type() fs.FileMode {
-	return squashfsTypeToMode(de.typ)
+	return de.typ.Mode()
 }
 
 func (de *direntry) Info() (fs.FileInfo, error) {

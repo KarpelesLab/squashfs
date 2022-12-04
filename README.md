@@ -13,7 +13,7 @@ sqfs, err := squashfs.Open("file.squashfs")
 if err != nil {
 	return err
 }
-defer f.Close()
+defer sqfs.Close()
 // sqfs can be used as a regular fs.FS
 data, err := fs.ReadFile(sqfs, "dir/file.txt")
 // or:
