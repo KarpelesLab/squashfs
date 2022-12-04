@@ -6,6 +6,14 @@ This is a read-only implementation of squashfs initially meant to be use with [g
 
 Since then, golang added `io/fs` and fuse support was moved to a `fuse` tag, which means this module can be either used with go-fuse, or as a simple `io/fs`-compliant squashfs file reader.
 
+## Tags
+
+The following tags can be specified on build to enable/disable features:
+
+* `fuse` adds methods to the Inode object to interact with fuse
+* `xz` adds a dependency on xz to support xz compressed files
+* `zstd` adds a dependency on zstd to support zstd compressed files
+
 # Example use
 
 ```go
