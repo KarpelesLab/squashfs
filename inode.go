@@ -543,7 +543,7 @@ func (i *Inode) LookupRelativeInodePath(ctx context.Context, name string) (*Inod
 }
 
 func (i *Inode) Mode() fs.FileMode {
-	return UnixToMode(uint32(i.Perm)) | squashfsTypeToMode(i.Type)
+	return unixToMode(uint32(i.Perm)) | squashfsTypeToMode(i.Type)
 }
 
 func (i *Inode) IsDir() bool {
