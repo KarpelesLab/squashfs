@@ -30,7 +30,7 @@ type Superblock struct {
 	ModTime           int32
 	BlockSize         uint32
 	FragCount         uint32
-	Comp              SquashComp
+	Comp              Compression
 	BlockLog          uint16
 	Flags             Flags
 	IdCount           uint16
@@ -121,7 +121,7 @@ func (s *Superblock) UnmarshalBinary(data []byte) error {
 	s.ModTime = int32(s.order.Uint32(data[8:12]))
 	s.BlockSize = s.order.Uint32(data[12:16])
 	s.FragCount = s.order.Uint32(data[16:20])
-	s.Comp = SquashComp(s.order.Uint16(data[20:22]))
+	s.Comp = Compression(s.order.Uint16(data[20:22]))
 	s.BlockLog = s.order.Uint16(data[22:24])
 	s.Flags = Flags(s.order.Uint16(data[24:26]))
 	s.IdCount = s.order.Uint16(data[26:28])

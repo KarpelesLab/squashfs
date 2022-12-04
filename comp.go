@@ -7,26 +7,26 @@ import (
 	"io"
 )
 
-type SquashComp uint16
+type Compression uint16
 
 type Decompressor func(buf []byte) ([]byte, error)
 
 var (
-	decompressHandler = map[SquashComp]Decompressor{
+	decompressHandler = map[Compression]Decompressor{
 		GZip: MakeDecompressorErr(zlib.NewReader),
 	}
 )
 
 const (
-	GZip SquashComp = 1
-	LZMA            = 2
-	LZO             = 3
-	XZ              = 4
-	LZ4             = 5
-	ZSTD            = 6
+	GZip Compression = 1
+	LZMA             = 2
+	LZO              = 3
+	XZ               = 4
+	LZ4              = 5
+	ZSTD             = 6
 )
 
-func (s SquashComp) String() string {
+func (s Compression) String() string {
 	switch s {
 	case GZip:
 		return "GZip"
@@ -41,10 +41,10 @@ func (s SquashComp) String() string {
 	case ZSTD:
 		return "ZSTD"
 	}
-	return fmt.Sprintf("SquashComp(%d)", s)
+	return fmt.Sprintf("Compression(%d)", s)
 }
 
-func (s SquashComp) decompress(buf []byte) ([]byte, error) {
+func (s Compression) decompress(buf []byte) ([]byte, error) {
 	if f, ok := decompressHandler[s]; ok {
 		return f(buf)
 	}
@@ -54,7 +54,7 @@ func (s SquashComp) decompress(buf []byte) ([]byte, error) {
 // RegisterDecompressor can be used to register a decompressor for squashfs.
 // By default GZip is supported. The method shall take a buffer and return a
 // decompressed buffer.
-func RegisterDecompressor(method SquashComp, dcomp Decompressor) {
+func RegisterDecompressor(method Compression, dcomp Decompressor) {
 	decompressHandler[method] = dcomp
 }
 
