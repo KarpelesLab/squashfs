@@ -562,17 +562,21 @@ func (i *Inode) Readlink() ([]byte, error) {
 }
 
 func (i *Inode) Open(flags uint32) (uint32, error) {
-	// ok :)
+	// always ok :)
+	// Tell fuse to cache the open (squashfs is readonly so not likely to change)
 	return fuse.FOPEN_KEEP_CACHE, nil
 }
 
 func (i *Inode) OpenDir() (uint32, error) {
 	if i.IsDir() {
+		// only allow open if IsDir is true
 		return fuse.FOPEN_KEEP_CACHE, nil
 	}
 	return 0, os.ErrInvalid
 }
 
+// publicInodeNum returns a inode number suitable for use in mounts sharing multiple squashfs images. The root is
+// required to be inode 1, so in case it is not the case we swap the root inode number with whatever inode it was
 func (i *Inode) publicInodeNum() uint64 {
 	// compute inode number suitable for public
 	if i.Ino == uint32(i.sb.rootInoN) {
@@ -586,6 +590,7 @@ func (i *Inode) publicInodeNum() uint64 {
 	}
 }
 
+// fillEntry files a fuse.EntryOut structure with the appropriate information
 func (i *Inode) fillEntry(entry *fuse.EntryOut) {
 	entry.NodeId = i.publicInodeNum()
 	entry.Attr.Ino = entry.NodeId

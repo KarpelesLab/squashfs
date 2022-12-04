@@ -115,12 +115,7 @@ func (fi *fileinfo) ModTime() time.Time {
 }
 
 func (fi *fileinfo) IsDir() bool {
-	switch fi.ino.Type {
-	case 1, 8:
-		return true
-	default:
-		return false
-	}
+	return fi.ino.IsDir()
 }
 
 func (fi *fileinfo) Sys() any {

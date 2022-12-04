@@ -21,4 +21,4 @@ SquashFS documentation starts with:
 
 It seems likely no documentation is available out there (pending further research).
 
-Looks like "basic dir" has no index. Extended dirs have an index, see index_count
+Looks like "basic dir" has no index. Extended dirs seem to have an index, see index_count
