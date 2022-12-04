@@ -5,7 +5,7 @@ import "io/fs"
 type Type uint16
 
 const (
-	DirType = iota + 1
+	DirType Type = iota + 1
 	FileType
 	SymlinkType
 	BlockDevType
