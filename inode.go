@@ -471,8 +471,6 @@ func (i *Inode) ReadAt(p []byte, off int64) (int, error) {
 			block += 1
 			offset = 0
 		}
-
-		log.Printf("load at block=%d offset=%d", block, offset)
 	}
 	return 0, fs.ErrInvalid
 }
