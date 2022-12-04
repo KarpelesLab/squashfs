@@ -85,4 +85,10 @@ func TestSquashfs(t *testing.T) {
 	if !errors.Is(err, squashfs.ErrNotDirectory) {
 		t.Errorf("readfile pkgconfig/zlib.pc/foo returned unexpected err=%s", err)
 	}
+
+	// test other error
+	_, err = sqfs.FindInode("lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/libz.a", false)
+	if !errors.Is(err, squashfs.ErrTooManySymlinks) {
+		t.Errorf("readfile lib/../lib/../(...)/libz.a returned unexpected err=%s", err)
+	}
 }

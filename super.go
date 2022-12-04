@@ -196,17 +196,18 @@ func (s *Superblock) SetInodeOffset(offt uint64) {
 // a symlink is found in the path, it will be followed anyway. If however the
 // target file is a symlink, then its inode will be returned.
 func (s *Superblock) FindInode(name string, followSymlinks bool) (*Inode, error) {
-	return s.FindInodeAt(s.rootIno, name, followSymlinks)
+	return s.FindInodeUnder(s.rootIno, name, followSymlinks)
 }
 
-// FindInodeAt returns an inode for a path starting at a given different inode,
-// and can be used to implement methods such as OpenAt, etc.
+// FindInodeUnder returns an inode for a path starting at a given different inode
 //
-// This will not prevent going higher than the given inode (ie. using ".." will
-// allow someone to access the inode's parent).
-func (s *Superblock) FindInodeAt(cur *Inode, name string, followSymlinks bool) (*Inode, error) {
+// Note that it is not possible to access directories outside the given path,
+// including using symlinks, as this effectively acts as a chroot. This can be
+// useful to implement fs.Sub
+func (s *Superblock) FindInodeUnder(cur *Inode, name string, followSymlinks bool) (*Inode, error) {
 	// similar to lookup, but handles slashes in name and returns an inode
-	parent := cur
+	parents := make(map[uint32]*Inode)
+	parents[cur.Ino] = cur
 	symlinkRedirects := 40 // maximum number of redirects before giving up
 
 	for {
@@ -242,7 +243,6 @@ func (s *Superblock) FindInodeAt(cur *Inode, name string, followSymlinks bool) (
 				return nil, fs.ErrInvalid
 			}
 			// continue lookup from that point
-			cur = parent
 			name = string(sym)
 			continue
 		}
@@ -253,6 +253,17 @@ func (s *Superblock) FindInodeAt(cur *Inode, name string, followSymlinks bool) (
 		}
 		if !cur.IsDir() {
 			return nil, ErrNotDirectory
+		}
+		if name[:pos] == "." {
+			// special case: keep cur as is
+			name = name[pos+1:]
+			continue
+		}
+		if name[:pos] == ".." {
+			// special case: move to parent dir
+			name = name[pos+1:]
+			cur = parents[cur.Ino]
+			continue
 		}
 		t, err := cur.lookupRelativeInode(name[:pos])
 		if err != nil {
@@ -285,7 +296,7 @@ func (s *Superblock) FindInodeAt(cur *Inode, name string, followSymlinks bool) (
 		}
 
 		// move forward
-		parent = cur
+		parents[t.Ino] = cur
 		cur = t
 		name = name[pos+1:]
 	}
