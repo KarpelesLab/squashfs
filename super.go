@@ -3,7 +3,6 @@ package squashfs
 import (
 	"context"
 	"encoding/binary"
-	"errors"
 	"io"
 	"io/fs"
 	"path"
@@ -67,11 +66,7 @@ func New(fs io.ReaderAt, inoOfft uint64) (*Superblock, error) {
 	}
 
 	if sb.VMajor != 4 || sb.VMinor != 0 {
-		return nil, errors.New("not squashfs 4.0")
-	}
-
-	if !sb.Flags.Has(EXPORTABLE) {
-		return nil, errors.New("need exportable squashfs")
+		return nil, ErrInvalidVersion
 	}
 
 	// get root inode
@@ -113,7 +108,7 @@ func (s *Superblock) UnmarshalBinary(data []byte) error {
 	case "sqsh":
 		s.order = binary.BigEndian
 	default:
-		return errors.New("invalid squashfs partition")
+		return ErrInvalidFile
 	}
 
 	s.Magic = s.order.Uint32(data[0:4])
@@ -138,11 +133,11 @@ func (s *Superblock) UnmarshalBinary(data []byte) error {
 
 	if s.Magic != 0x73717368 {
 		// shouldn't happen
-		return errors.New("invalid squashfs partition")
+		return ErrInvalidFile
 	}
 
 	if uint32(1)<<s.BlockLog != s.BlockSize {
-		return errors.New("invalid squashfs: block size check failed")
+		return ErrInvalidSuper
 	}
 
 	//log.Printf("parsed SquashFS %d.%d blocksize=%d bytes=%d comp=%s flags=%s", s.VMajor, s.VMinor, s.BlockSize, s.BytesUsed, s.Comp, s.Flags)

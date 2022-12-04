@@ -55,16 +55,33 @@ func (sb *Superblock) GetInode(ino uint64) (*Inode, error) {
 
 	// check index
 	sb.inoIdxL.RLock()
-	inor, ok := sb.inoIdx[uint32(ino)]
+	inoR, ok := sb.inoIdx[uint32(ino)]
 	sb.inoIdxL.RUnlock()
 	if ok {
-		return sb.GetInodeRef(inor)
+		return sb.GetInodeRef(inoR)
 	}
 
-	// TODO locate inodeRef from the nfs export table
+	if !sb.Flags.Has(EXPORTABLE) {
+		return nil, ErrInodeNotExported
+	}
 
-	log.Printf("get inode WIP %d", ino)
-	return nil, fs.ErrInvalid
+	// load the export table
+	tr, err := sb.newTableReader(int64(sb.ExportTableStart), int(8*(ino-1)))
+	if err != nil {
+		return nil, err
+	}
+
+	err = binary.Read(tr, sb.order, &inoR)
+	if err != nil {
+		return nil, err
+	}
+
+	// cache value
+	sb.inoIdxL.Lock()
+	sb.inoIdx[uint32(ino)] = inoR
+	sb.inoIdxL.Unlock()
+
+	return sb.GetInodeRef(inoR)
 }
 
 func (sb *Superblock) GetInodeRef(inor inodeRef) (*Inode, error) {
