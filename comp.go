@@ -59,8 +59,8 @@ func RegisterDecompressor(method Compression, dcomp Decompressor) {
 // uses the reader/writer API, but should allow to easily handle some formats.
 //
 // Example use:
-// squashfs.RegisterDecompressor(squashfs.ZSTD, squashfs.MakeDecompressor(zstd.ZipDecompressor()))
-// squashfs.RegisterDecompressor(squashfs.LZ4, squashfs.MakeDecompressor(lz4.NewReader)))
+// * squashfs.RegisterDecompressor(squashfs.ZSTD, squashfs.MakeDecompressor(zstd.ZipDecompressor()))
+// * squashfs.RegisterDecompressor(squashfs.LZ4, squashfs.MakeDecompressor(lz4.NewReader)))
 func MakeDecompressor(dec func(r io.Reader) io.ReadCloser) Decompressor {
 	return func(buf []byte) ([]byte, error) {
 		r := bytes.NewReader(buf)
@@ -76,8 +76,8 @@ func MakeDecompressor(dec func(r io.Reader) io.ReadCloser) Decompressor {
 // returns an error.
 //
 // Example use:
-// squashfs.RegisterDecompressor(squashfs.LZMA, squashfs.MakeDecompressorErr(lzma.NewReader))
-// squashfs.RegisterDecompressor(squashfs.XZ, squashfs.MakeDecompressorErr(xz.NewReader))
+// * squashfs.RegisterDecompressor(squashfs.LZMA, squashfs.MakeDecompressorErr(lzma.NewReader))
+// * squashfs.RegisterDecompressor(squashfs.XZ, squashfs.MakeDecompressorErr(xz.NewReader))
 func MakeDecompressorErr(dec func(r io.Reader) (io.ReadCloser, error)) Decompressor {
 	return func(buf []byte) ([]byte, error) {
 		r := bytes.NewReader(buf)
