@@ -25,18 +25,18 @@ type Superblock struct {
 	inoOfft  uint64
 	idTable  []uint32
 
-	Magic             uint32
-	InodeCnt          uint32
-	ModTime           int32
-	BlockSize         uint32
+	Magic             uint32 // magic identifier
+	InodeCnt          uint32 // number of inodes in filesystem
+	ModTime           int32  // creation unix time as int32 (will stop working in 2038)
+	BlockSize         uint32 // size of a single data block, must match 1<<BlockLog
 	FragCount         uint32
-	Comp              Compression
+	Comp              Compression // Compression used, usually GZip
 	BlockLog          uint16
-	Flags             Flags
+	Flags             Flags // squashfs flags
 	IdCount           uint16
 	VMajor            uint16
 	VMinor            uint16
-	RootInode         inodeRef
+	RootInode         inodeRef // inode number/reference of root
 	BytesUsed         uint64
 	IdTableStart      uint64
 	XattrIdTableStart uint64
