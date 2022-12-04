@@ -5,8 +5,8 @@ package squashfs
 import (
 	"context"
 	"io"
+	"io/fs"
 	"log"
-	"os"
 	"time"
 
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -31,7 +31,7 @@ func (i *Inode) OpenDir() (uint32, error) {
 		// only allow open if IsDir is true
 		return fuse.FOPEN_KEEP_CACHE, nil
 	}
-	return 0, os.ErrInvalid
+	return 0, fs.ErrInvalid
 }
 
 // publicInodeNum returns a inode number suitable for use in mounts sharing multiple squashfs images. The root is
@@ -143,5 +143,5 @@ func (i *Inode) ReadDir(input *fuse.ReadIn, out *fuse.DirEntryList, plus bool) e
 			}
 		}
 	}
-	return os.ErrInvalid
+	return fs.ErrInvalid
 }

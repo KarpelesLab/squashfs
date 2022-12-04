@@ -7,7 +7,6 @@ import (
 	"io"
 	"io/fs"
 	"log"
-	"os"
 	"strings"
 	"sync/atomic"
 )
@@ -65,7 +64,7 @@ func (sb *Superblock) GetInode(ino uint64) (*Inode, error) {
 	// TODO locate inodeRef from the nfs export table
 
 	log.Printf("get inode WIP %d", ino)
-	return nil, os.ErrInvalid
+	return nil, fs.ErrInvalid
 }
 
 func (sb *Superblock) GetInodeRef(inor inodeRef) (*Inode, error) {
@@ -477,7 +476,7 @@ func (i *Inode) LookupRelativeInode(ctx context.Context, name string) (*Inode, e
 			ename, inoR, err := dr.next()
 			if err != nil {
 				if err == io.EOF {
-					return nil, os.ErrNotExist
+					return nil, fs.ErrNotExist
 				}
 				return nil, err
 			}
@@ -498,7 +497,7 @@ func (i *Inode) LookupRelativeInode(ctx context.Context, name string) (*Inode, e
 		}
 	}
 	log.Printf("squashfs: lookup name %s from inode %d TODO", name, i.Ino)
-	return nil, os.ErrInvalid
+	return nil, fs.ErrInvalid
 }
 
 func (i *Inode) LookupRelativeInodePath(ctx context.Context, name string) (*Inode, error) {
@@ -547,7 +546,7 @@ func (i *Inode) Readlink() ([]byte, error) {
 	case 3, 10:
 		return i.SymTarget, nil
 	}
-	return nil, os.ErrInvalid
+	return nil, fs.ErrInvalid
 }
 
 func (i *Inode) AddRef(count uint64) uint64 {

@@ -13,7 +13,7 @@ type Decompressor func(buf []byte) ([]byte, error)
 
 var (
 	decompressHandler = map[SquashComp]Decompressor{
-		GZip: decompressGzip,
+		GZip: MakeDecompressorErr(zlib.NewReader),
 	}
 )
 
@@ -44,13 +44,6 @@ func (s SquashComp) String() string {
 	return fmt.Sprintf("SquashComp(%d)", s)
 }
 
-// RegisterDecompressor can be used to register a decompressor for squashfs.
-// By default GZip is supported. The method shall take a buffer and return a
-// decompressed buffer.
-func RegisterDecompressor(method SquashComp, dcomp Decompressor) {
-	decompressHandler[method] = dcomp
-}
-
 func (s SquashComp) decompress(buf []byte) ([]byte, error) {
 	if f, ok := decompressHandler[s]; ok {
 		return f(buf)
@@ -58,18 +51,11 @@ func (s SquashComp) decompress(buf []byte) ([]byte, error) {
 	return nil, fmt.Errorf("unsupported compression format %s", s.String())
 }
 
-func decompressGzip(buf []byte) ([]byte, error) {
-	r, err := zlib.NewReader(bytes.NewReader(buf))
-	if err != nil {
-		return nil, err
-	}
-	b := &bytes.Buffer{}
-	_, err = io.Copy(b, r)
-	if err != nil {
-		return nil, err
-	}
-	r.Close()
-	return b.Bytes(), nil
+// RegisterDecompressor can be used to register a decompressor for squashfs.
+// By default GZip is supported. The method shall take a buffer and return a
+// decompressed buffer.
+func RegisterDecompressor(method SquashComp, dcomp Decompressor) {
+	decompressHandler[method] = dcomp
 }
 
 // MakeDecompressor allows using a decompressor made for archive/zip with
@@ -78,13 +64,34 @@ func decompressGzip(buf []byte) ([]byte, error) {
 //
 // Example use:
 // squashfs.RegisterDecompressor(squashfs.ZSTD, squashfs.MakeDecompressor(zstd.ZipDecompressor()))
-func MakeDecompressor(dec func(r io.Reader) io.ReadCloser) func([]byte) ([]byte, error) {
+// squashfs.RegisterDecompressor(squashfs.LZ4, squashfs.MakeDecompressor(lz4.NewReader)))
+func MakeDecompressor(dec func(r io.Reader) io.ReadCloser) Decompressor {
 	return func(buf []byte) ([]byte, error) {
 		r := bytes.NewReader(buf)
-		w := &bytes.Buffer{}
 		p := dec(r)
 		defer p.Close()
+		w := &bytes.Buffer{}
 		_, err := io.Copy(w, p)
+		return w.Bytes(), err
+	}
+}
+
+// MakeDecompressorErr is similar to MakeDecompressor but the factory method also
+// returns an error.
+//
+// Example use:
+// squashfs.RegisterDecompressor(squashfs.LZMA, squashfs.MakeDecompressorErr(lzma.NewReader))
+// squashfs.RegisterDecompressor(squashfs.XZ, squashfs.MakeDecompressorErr(xz.NewReader))
+func MakeDecompressorErr(dec func(r io.Reader) (io.ReadCloser, error)) Decompressor {
+	return func(buf []byte) ([]byte, error) {
+		r := bytes.NewReader(buf)
+		p, err := dec(r)
+		if err != nil {
+			return nil, err
+		}
+		defer p.Close()
+		w := &bytes.Buffer{}
+		_, err = io.Copy(w, p)
 		return w.Bytes(), err
 	}
 }
