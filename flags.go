@@ -2,10 +2,10 @@ package squashfs
 
 import "strings"
 
-type SquashFlags uint16
+type Flags uint16
 
 const (
-	UNCOMPRESSED_INODES SquashFlags = 1 << iota
+	UNCOMPRESSED_INODES Flags = 1 << iota
 	UNCOMPRESSED_DATA
 	CHECK
 	UNCOMPRESSED_FRAGMENTS
@@ -19,7 +19,7 @@ const (
 	UNCOMPRESSED_IDS
 )
 
-func (f SquashFlags) String() string {
+func (f Flags) String() string {
 	var opt []string
 
 	if f&UNCOMPRESSED_INODES != 0 {
@@ -62,6 +62,6 @@ func (f SquashFlags) String() string {
 	return strings.Join(opt, "|")
 }
 
-func (f SquashFlags) Has(what SquashFlags) bool {
+func (f Flags) Has(what Flags) bool {
 	return f&what == what
 }

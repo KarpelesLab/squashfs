@@ -32,7 +32,7 @@ type Superblock struct {
 	FragCount         uint32
 	Comp              SquashComp
 	BlockLog          uint16
-	Flags             SquashFlags
+	Flags             Flags
 	IdCount           uint16
 	VMajor            uint16
 	VMinor            uint16
@@ -123,7 +123,7 @@ func (s *Superblock) UnmarshalBinary(data []byte) error {
 	s.FragCount = s.order.Uint32(data[16:20])
 	s.Comp = SquashComp(s.order.Uint16(data[20:22]))
 	s.BlockLog = s.order.Uint16(data[22:24])
-	s.Flags = SquashFlags(s.order.Uint16(data[24:26]))
+	s.Flags = Flags(s.order.Uint16(data[24:26]))
 	s.IdCount = s.order.Uint16(data[26:28])
 	s.VMajor = s.order.Uint16(data[28:30])
 	s.VMinor = s.order.Uint16(data[30:32])
