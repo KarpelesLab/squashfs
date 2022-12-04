@@ -57,10 +57,25 @@ func TestSquashfs(t *testing.T) {
 
 	st, err := fs.Stat(sqfs, "include/zlib.h")
 	if err != nil {
-		t.Errorf("failed to stat include/zlib.h")
+		t.Errorf("failed to stat include/zlib.h: %s", err)
 	} else {
 		if st.Size() != 97323 {
 			t.Errorf("bad file size on stat include/zlib.h")
 		}
+	}
+
+	// test stat vs lstat
+	st, err = fs.Stat(sqfs, "lib")
+	if err != nil {
+		t.Errorf("failed to stat lib: %s", err)
+	} else if !st.IsDir() {
+		t.Errorf("failed: stat(lib) did not return a directory")
+	}
+
+	st, err = sqfs.Lstat("lib")
+	if err != nil {
+		t.Errorf("failed to lstat lib: %s", err)
+	} else if st.IsDir() {
+		t.Errorf("failed: lstat(lib) should have returned something that is not a directory")
 	}
 }

@@ -6,7 +6,6 @@ import (
 	"io/fs"
 	"os"
 	"path"
-	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -14,7 +13,9 @@ import (
 
 const SuperblockSize = 96
 
-// https://dr-emann.github.io/squashfs/
+// Superblock is the main object representing a squashfs image, and exposes various information about
+// the file. You can ignore most of these and use the object directly to access files/etc, or inspect
+// various elements of the squashfs image.
 type Superblock struct {
 	fs    io.ReaderAt
 	order binary.ByteOrder
@@ -185,21 +186,6 @@ func (s *Superblock) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-func (s *Superblock) binarySize() int {
-	v := reflect.ValueOf(s).Elem()
-	c := v.NumField()
-	sz := uintptr(0)
-
-	for i := 0; i < c; i++ {
-		c := v.Type().Field(i).Name[0]
-		if c < 'A' || c > 'Z' {
-			continue
-		}
-		sz += v.Field(i).Type().Size()
-	}
-	return int(sz)
-}
-
 // SetInodeOffset allows setting the inode offset used for interacting with fuse. This can be safely ignored if not using fuse
 // or when mounting only a single squashfs via fuse.
 func (s *Superblock) SetInodeOffset(offt uint64) {
@@ -213,6 +199,11 @@ func (s *Superblock) FindInode(name string, followSymlinks bool) (*Inode, error)
 	return s.FindInodeAt(s.rootIno, name, followSymlinks)
 }
 
+// FindInodeAt returns an inode for a path starting at a given different inode,
+// and can be used to implement methods such as OpenAt, etc.
+//
+// This will not prevent going higher than the given inode (ie. using ".." will
+// allow someone to access the inode's parent).
 func (s *Superblock) FindInodeAt(cur *Inode, name string, followSymlinks bool) (*Inode, error) {
 	// similar to lookup, but handles slashes in name and returns an inode
 	parent := cur
@@ -367,6 +358,8 @@ func (sb *Superblock) Stat(name string) (fs.FileInfo, error) {
 	return &fileinfo{name: path.Base(name), ino: ino}, nil
 }
 
+// Lstat will return stats for a given path inside the sqhashfs archive. If
+// the target is a symbolic link, data on the link itself will be returned.
 func (sb *Superblock) Lstat(name string) (fs.FileInfo, error) {
 	if !fs.ValidPath(name) {
 		return nil, &fs.PathError{Op: "lstat", Path: name, Err: fs.ErrInvalid}
