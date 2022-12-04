@@ -279,6 +279,10 @@ func (s *Superblock) FindInodeAt(cur *Inode, name string, followSymlinks bool) (
 			// do not update cur since lookup resumes from that point
 			continue
 		}
+		// there still are further lookups, so this must be a directory
+		if !t.IsDir() {
+			return nil, ErrNotDirectory
+		}
 
 		// move forward
 		parent = cur

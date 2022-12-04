@@ -3,6 +3,7 @@ package squashfs_test
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io/fs"
 	"log"
 	"testing"
@@ -77,5 +78,11 @@ func TestSquashfs(t *testing.T) {
 		t.Errorf("failed to lstat lib: %s", err)
 	} else if st.IsDir() {
 		t.Errorf("failed: lstat(lib) should have returned something that is not a directory")
+	}
+
+	// test error
+	_, err = fs.ReadFile(sqfs, "pkgconfig/zlib.pc/foo")
+	if !errors.Is(err, squashfs.ErrNotDirectory) {
+		t.Errorf("readfile pkgconfig/zlib.pc/foo returned unexpected err=%s", err)
 	}
 }
