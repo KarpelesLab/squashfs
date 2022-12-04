@@ -9,22 +9,18 @@ import (
 
 type Compression uint16
 
+const (
+	GZip Compression = iota + 1
+	LZMA
+	LZO
+	XZ
+	LZ4
+	ZSTD
+)
+
 type Decompressor func(buf []byte) ([]byte, error)
 
-var (
-	decompressHandler = map[Compression]Decompressor{
-		GZip: MakeDecompressorErr(zlib.NewReader),
-	}
-)
-
-const (
-	GZip Compression = 1
-	LZMA             = 2
-	LZO              = 3
-	XZ               = 4
-	LZ4              = 5
-	ZSTD             = 6
-)
+var decompressHandler = map[Compression]Decompressor{GZip: MakeDecompressorErr(zlib.NewReader)}
 
 func (s Compression) String() string {
 	switch s {
