@@ -6,6 +6,22 @@ This is a read-only implementation of squashfs initially meant to be use with [g
 
 Since then, golang added `io/fs` and fuse support was moved to a `fuse` tag, which means this module can be either used with go-fuse, or as a simple `io/fs`-compliant squashfs file reader.
 
+# Example use
+
+```go
+f, err := os.Open("file.squashfs")
+if err != nil {
+	return err
+}
+defer f.Close()
+sqfs, err := squashfs.New(f, 0)
+if err != nil {
+	return err
+}
+// sqfs can be used as a regular fs.FS
+data, err := fs.ReadFile(sqfs, "dir/file.txt")
+```
+
 # File format
 
 ## SquashFS format
