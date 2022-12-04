@@ -8,8 +8,8 @@ import (
 
 // File is a convience object allowing using an inode as if it was a regular file
 type File struct {
+	*io.SectionReader
 	ino  *Inode
-	pos  int64
 	name string
 }
 
@@ -33,30 +33,19 @@ var _ fs.ReadDirFile = (*FileDir)(nil)
 
 var _ fs.FileInfo = (*fileinfo)(nil)
 
-// OpenFile returns a fs.File for a given inode
+// OpenFile returns a fs.File for a given inode. If the file is a directory, the returned object will implement
+// fs.ReadDirFile. If it is a regular file it will also implement io.Seeker.
 func (ino *Inode) OpenFile(name string) fs.File {
 	switch ino.Type {
 	case 1, 8:
 		return &FileDir{ino: ino, name: name}
 	default:
-		return &File{ino: ino, name: name}
+		sec := io.NewSectionReader(ino, 0, int64(ino.Size))
+		return &File{SectionReader: sec, ino: ino, name: name}
 	}
 }
 
 // (File)
-
-// ReadAt reads from the given file at a given position implementing os.ReaderAt
-func (f *File) ReadAt(p []byte, off int64) (n int, err error) {
-	return f.ino.ReadAt(p, off)
-}
-
-func (f *File) Read(p []byte) (int, error) {
-	n, err := f.ino.ReadAt(p, f.pos)
-	if n > 0 {
-		f.pos += int64(n)
-	}
-	return n, err
-}
 
 func (f *File) Stat() (fs.FileInfo, error) {
 	return &fileinfo{
