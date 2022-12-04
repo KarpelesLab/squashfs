@@ -3,6 +3,7 @@ package squashfs
 import (
 	"io"
 	"io/fs"
+	"path"
 	"time"
 )
 
@@ -48,10 +49,7 @@ func (ino *Inode) OpenFile(name string) fs.File {
 // (File)
 
 func (f *File) Stat() (fs.FileInfo, error) {
-	return &fileinfo{
-		name: f.name,
-		ino:  f.ino,
-	}, nil
+	return &fileinfo{name: path.Base(f.name), ino: f.ino}, nil
 }
 
 func (f *File) Close() error {
@@ -65,7 +63,7 @@ func (d *FileDir) Read(p []byte) (int, error) {
 }
 
 func (d *FileDir) Stat() (fs.FileInfo, error) {
-	return &fileinfo{name: d.name, ino: d.ino}, nil
+	return &fileinfo{name: path.Base(d.name), ino: d.ino}, nil
 }
 
 func (d *FileDir) Close() error {
