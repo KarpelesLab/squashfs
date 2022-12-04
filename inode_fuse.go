@@ -126,9 +126,7 @@ func (i *Inode) ReadDir(input *fuse.ReadIn, out *fuse.DirEntryList, plus bool) e
 				return err
 			}
 
-			i.sb.inoIdxL.Lock()
-			i.sb.inoIdx[ino.Ino] = inoR
-			i.sb.inoIdxL.Unlock()
+			i.sb.setInodeRefCache(ino.Ino, inoR)
 
 			if !plus {
 				if !out.Add(0, string(name), ino.publicInodeNum(), uint32(ino.Perm)) {

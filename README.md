@@ -9,17 +9,16 @@ Since then, golang added `io/fs` and fuse support was moved to a `fuse` tag, whi
 # Example use
 
 ```go
-f, err := os.Open("file.squashfs")
+sqfs, err := squashfs.Open("file.squashfs")
 if err != nil {
 	return err
 }
 defer f.Close()
-sqfs, err := squashfs.New(f, 0)
-if err != nil {
-	return err
-}
 // sqfs can be used as a regular fs.FS
 data, err := fs.ReadFile(sqfs, "dir/file.txt")
+// or:
+http.Handle("/", http.FileServer(sqfs))
+// etc...
 ```
 
 # File format

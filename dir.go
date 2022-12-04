@@ -149,9 +149,7 @@ func (de *direntry) Info() (fs.FileInfo, error) {
 		return nil, err
 	}
 	// cache
-	de.sb.inoIdxL.Lock()
-	de.sb.inoIdx[found.Ino] = de.inoR
-	de.sb.inoIdxL.Unlock()
+	de.sb.setInodeRefCache(found.Ino, de.inoR)
 	// append
 	return &fileinfo{name: de.name, ino: found}, nil
 }

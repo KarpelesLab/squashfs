@@ -53,15 +53,15 @@ func (sb *Superblock) GetInode(ino uint64) (*Inode, error) {
 		ino = 1
 	}
 
-	// check index
-	sb.inoIdxL.RLock()
-	inoR, ok := sb.inoIdx[uint32(ino)]
-	sb.inoIdxL.RUnlock()
+	// check index cache
+	inoR, ok := sb.getInodeRefCache(uint32(ino))
 	if ok {
 		return sb.GetInodeRef(inoR)
 	}
 
-	if !sb.Flags.Has(EXPORTABLE) {
+	// we do not use the flags here, but only see if the table is present. If absent it will be all f's
+	//if !sb.Flags.Has(EXPORTABLE) {
+	if sb.ExportTableStart == ^uint64(0) {
 		return nil, ErrInodeNotExported
 	}
 
@@ -77,9 +77,7 @@ func (sb *Superblock) GetInode(ino uint64) (*Inode, error) {
 	}
 
 	// cache value
-	sb.inoIdxL.Lock()
-	sb.inoIdx[uint32(ino)] = inoR
-	sb.inoIdxL.Unlock()
+	sb.setInodeRefCache(uint32(ino), inoR)
 
 	return sb.GetInodeRef(inoR)
 }
@@ -505,9 +503,7 @@ func (i *Inode) LookupRelativeInode(ctx context.Context, name string) (*Inode, e
 					return nil, err
 				}
 				// cache
-				i.sb.inoIdxL.Lock()
-				i.sb.inoIdx[found.Ino] = inoR
-				i.sb.inoIdxL.Unlock()
+				i.sb.setInodeRefCache(found.Ino, inoR)
 				// return
 				return found, nil
 			}
