@@ -139,25 +139,7 @@ func (de *direntry) IsDir() bool {
 }
 
 func (de *direntry) Type() fs.FileMode {
-	switch de.typ {
-	case 1, 8:
-		return fs.ModeDir
-	case 2, 9:
-		return 0
-	case 3, 10:
-		return fs.ModeSymlink
-	case 4, 11:
-		return fs.ModeDevice // block device
-	case 5, 12:
-		return fs.ModeDevice | fs.ModeCharDevice // char device
-	case 6, 13:
-		return fs.ModeNamedPipe
-	case 7, 14:
-		return fs.ModeSocket
-	default:
-		// ??
-		return fs.ModeIrregular
-	}
+	return squashfsTypeToMode(de.typ)
 }
 
 func (de *direntry) Info() (fs.FileInfo, error) {

@@ -542,25 +542,7 @@ func (i *Inode) LookupRelativeInodePath(ctx context.Context, name string) (*Inod
 }
 
 func (i *Inode) Mode() fs.FileMode {
-	res := UnixToMode(uint32(i.Perm))
-	switch i.Type {
-	case 1, 8: // Dir
-		res |= os.ModeDir
-	case 2, 9: // file
-		// nothing
-	case 3, 10:
-		res |= os.ModeSymlink
-	case 4, 11:
-		res |= os.ModeDevice
-	case 5, 12:
-		res |= os.ModeCharDevice
-	case 6, 13:
-		res |= os.ModeNamedPipe
-	case 7, 14:
-		res |= os.ModeSocket
-	}
-
-	return res
+	return UnixToMode(uint32(i.Perm)) | squashfsTypeToMode(i.Type)
 }
 
 func (i *Inode) IsDir() bool {
