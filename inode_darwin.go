@@ -1,3 +1,5 @@
+//go:build darwin && fuse
+
 package squashfs
 
 import (
