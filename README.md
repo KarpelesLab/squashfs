@@ -1,3 +1,5 @@
+[![GoDoc](https://godoc.org/github.com/KarpelesLab/squashfs?status.svg)](https://godoc.org/github.com/KarpelesLab/squashfs)
+
 # squashfs
 
 This is a read-only implementation of squashfs initially meant to be use with [go-fuse](https://github.com/hanwen/go-fuse/).
