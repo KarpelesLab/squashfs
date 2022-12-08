@@ -23,7 +23,10 @@ const (
 
 // Basic returns the type as a basic type (ie. XDirType.Basic() == DirType)
 func (t Type) Basic() Type {
-	return t & 0x07
+	if t >= 8 {
+		return t - 7
+	}
+	return t
 }
 
 func (t Type) IsDir() bool {
