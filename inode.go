@@ -6,6 +6,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"strings"
 	"sync/atomic"
 )
 
@@ -39,6 +40,7 @@ type Inode struct {
 	// file blocks (some have value 0x1001000)
 	Blocks     []uint32
 	BlocksOfft []uint64
+	DirIndex   []*DirIndexEntry
 }
 
 func (sb *Superblock) GetInode(ino uint64) (*Inode, error) {
@@ -189,6 +191,31 @@ func (sb *Superblock) GetInodeRef(inor inodeRef) (*Inode, error) {
 		err = binary.Read(r, sb.order, &ino.XattrIdx)
 		if err != nil {
 			return nil, err
+		}
+
+		ino.DirIndex = make([]*DirIndexEntry, ino.IdxCount) // max 65536 as this is 16bits
+		buf := make([]byte, 4*3)                            // read 4 u32 values
+		for n := range ino.DirIndex {
+			_, err = io.ReadFull(r, buf)
+			if err != nil {
+				return nil, err
+			}
+			di := &DirIndexEntry{
+				Index: sb.order.Uint32(buf[:4]),
+				Start: sb.order.Uint32(buf[4:8]),
+			}
+			nameLen := sb.order.Uint32(buf[8:12]) + 1
+			if nameLen > 256 {
+				// MAX_PATH is actually lower than that on most platforms
+				return nil, errors.New("directory index contains name length >256")
+			}
+			name := make([]byte, sb.order.Uint32(buf[8:12])+1)
+			_, err = io.ReadFull(r, name)
+			if err != nil {
+				return nil, err
+			}
+			di.Name = string(name)
+			ino.DirIndex[n] = di
 		}
 		//log.Printf("squashfs: read extended directory success, parent=%d indexes=%d size=%d", ino.ParentIno, ino.IdxCount, ino.Size)
 	case 2: // Basic file
@@ -480,8 +507,16 @@ func (i *Inode) lookupRelativeInode(name string) (*Inode, error) {
 	// TODO: handle indexes
 	switch i.Type {
 	case 1, 8:
-		// basic dir, we need to iterate (cache data?)
-		dr, err := i.sb.dirReader(i)
+		// basic/extended dir, we need to iterate (cache data?)
+		var di *DirIndexEntry
+		for _, t := range i.DirIndex {
+			if strings.Compare(name, t.Name) < 0 {
+				// went too far or no index (ie. basic dir)
+				break
+			}
+			di = t
+		}
+		dr, err := i.sb.dirReader(i, di)
 		if err != nil {
 			return nil, err
 		}

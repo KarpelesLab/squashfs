@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log"
 	"testing"
+	"time"
 
 	"github.com/KarpelesLab/squashfs"
 )
@@ -90,5 +91,41 @@ func TestSquashfs(t *testing.T) {
 	_, err = sqfs.FindInode("lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/../lib/libz.a", false)
 	if !errors.Is(err, squashfs.ErrTooManySymlinks) {
 		t.Errorf("readfile lib/../lib/../(...)/libz.a returned unexpected err=%s", err)
+	}
+}
+
+func TestBigdir(t *testing.T) {
+	sqfs, err := squashfs.Open("testdata/bigdir.squashfs")
+	if err != nil {
+		t.Fatalf("failed to open testdata/zlib-dev.squashfs: %s", err)
+	}
+	defer sqfs.Close()
+
+	t1 := time.Now()
+	data, err := fs.ReadFile(sqfs, "bigdir/99999.txt")
+	d := time.Since(t1)
+	if err != nil {
+		t.Errorf("failed to read bigdir/99999.txt: %s", err)
+	} else {
+		//log.Printf("zlib.pc = %s", s256(data))
+		if string(data) != "" {
+			t.Errorf("invalid value for bigdir/99999.txt")
+		}
+
+		if d > time.Millisecond {
+			t.Errorf("read of bigdir/99999.txt took too long: %s (expected sub-millisecond read time)", d)
+		}
+	}
+
+	data, err = fs.ReadFile(sqfs, "bigdir/999.txt")
+	if err != nil {
+		t.Errorf("failed to read bigdir/999.txt: %s", err)
+	} else if string(data) != "" {
+		t.Errorf("invalid value for bigdir/999.txt")
+	}
+
+	_, err = fs.ReadFile(sqfs, "bigdir/999999.txt")
+	if err == nil {
+		t.Errorf("failed to fail to read bigdir/999999.txt: %s", err)
 	}
 }

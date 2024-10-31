@@ -88,7 +88,7 @@ func (d *FileDir) Close() error {
 
 func (d *FileDir) ReadDir(n int) ([]fs.DirEntry, error) {
 	if d.r == nil {
-		dr, err := d.ino.sb.dirReader(d.ino)
+		dr, err := d.ino.sb.dirReader(d.ino, nil)
 		if err != nil {
 			return nil, err
 		}

@@ -20,7 +20,25 @@ type direntry struct {
 	sb   *Superblock
 }
 
-func (sb *Superblock) dirReader(i *Inode) (*dirReader, error) {
+type DirIndexEntry struct {
+	Index uint32
+	Start uint32
+	Name  string
+}
+
+func (sb *Superblock) dirReader(i *Inode, seek *DirIndexEntry) (*dirReader, error) {
+	if seek != nil {
+		tbl, err := i.sb.newTableReader(int64(i.sb.DirTableStart)+int64(i.StartBlock)+int64(seek.Start), int(seek.Index&0x1fff))
+		if err != nil {
+			return nil, err
+		}
+		dr := &dirReader{
+			sb: i.sb,
+			r:  &io.LimitedReader{R: tbl, N: int64(i.Size) - int64(seek.Index)},
+		}
+		return dr, nil
+	}
+
 	tbl, err := i.sb.newTableReader(int64(i.sb.DirTableStart)+int64(i.StartBlock), int(i.Offset))
 	if err != nil {
 		return nil, err
@@ -32,6 +50,11 @@ func (sb *Superblock) dirReader(i *Inode) (*dirReader, error) {
 	}
 
 	return dr, nil
+}
+
+func (dr *dirReader) seek(di *DirIndexEntry) error {
+	// found di = &{Index:1693630 Start:539673 Name:99870.txt}
+	return nil
 }
 
 func (dr *dirReader) next() (string, inodeRef, error) {

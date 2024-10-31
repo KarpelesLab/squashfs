@@ -349,7 +349,7 @@ func (sb *Superblock) ReadDir(name string) ([]fs.DirEntry, error) {
 	switch ino.Type {
 	case 1, 8:
 		// basic dir, we need to iterate (cache data?)
-		dr, err := sb.dirReader(ino)
+		dr, err := sb.dirReader(ino, nil)
 		if err != nil {
 			return nil, err
 		}
