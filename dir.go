@@ -28,13 +28,13 @@ type DirIndexEntry struct {
 
 func (sb *Superblock) dirReader(i *Inode, seek *DirIndexEntry) (*dirReader, error) {
 	if seek != nil {
-		tbl, err := i.sb.newTableReader(int64(i.sb.DirTableStart)+int64(i.StartBlock)+int64(seek.Start), int(seek.Index&0x1fff))
+		tbl, err := i.sb.newTableReader(int64(i.sb.DirTableStart)+int64(seek.Start), (int(i.Offset)+int(seek.Index))&0x1fff)
 		if err != nil {
 			return nil, err
 		}
 		dr := &dirReader{
 			sb: i.sb,
-			r:  &io.LimitedReader{R: tbl, N: int64(i.Size) - int64(seek.Start)},
+			r:  &io.LimitedReader{R: tbl, N: int64(i.Size) - int64(seek.Index)},
 		}
 		return dr, nil
 	}

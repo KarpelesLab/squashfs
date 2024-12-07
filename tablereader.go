@@ -1,6 +1,9 @@
 package squashfs
 
-import "log"
+import (
+	"fmt"
+	"io"
+)
 
 // TODO add buf cache to allow multiple accesses to same block without re-reading
 type tableReader struct {
@@ -22,7 +25,10 @@ func (sb *Superblock) newTableReader(base int64, start int) (*tableReader, error
 
 	err := ir.readBlock()
 	if err != nil {
-		return nil, err
+		if err == io.EOF {
+			err = io.ErrUnexpectedEOF
+		}
+		return nil, fmt.Errorf("failed to read initial block: %w", err)
 	}
 
 	if start != 0 {
@@ -88,7 +94,7 @@ func (i *tableReader) readBlock() error {
 		// decompress
 		buf, err = i.sb.Comp.decompress(buf)
 		if err != nil {
-			log.Printf("squashfs: failed to read compressed data: %s", err)
+			//log.Printf("squashfs: failed to read compressed data: %s", err)
 			return err
 		}
 	}

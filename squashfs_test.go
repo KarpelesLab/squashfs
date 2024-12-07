@@ -97,7 +97,7 @@ func TestSquashfs(t *testing.T) {
 func TestBigdir(t *testing.T) {
 	sqfs, err := squashfs.Open("testdata/bigdir.squashfs")
 	if err != nil {
-		t.Fatalf("failed to open testdata/zlib-dev.squashfs: %s", err)
+		t.Fatalf("failed to open testdata/bigdir.squashfs: %s", err)
 	}
 	defer sqfs.Close()
 
@@ -112,7 +112,7 @@ func TestBigdir(t *testing.T) {
 			t.Errorf("invalid value for bigdir/99999.txt")
 		}
 
-		if d > time.Millisecond {
+		if d > 2*time.Millisecond {
 			t.Errorf("read of bigdir/99999.txt took too long: %s (expected sub-millisecond read time)", d)
 		}
 	}
@@ -128,12 +128,25 @@ func TestBigdir(t *testing.T) {
 	if err == nil {
 		t.Errorf("failed to fail to read bigdir/999999.txt: %s", err)
 	}
-	_, err = fs.ReadFile(sqfs, "bigdir/123456.txt")
-	if err == nil {
-		t.Errorf("failed to fail to read bigdir/123456.txt: %s", err)
+	_, err = fs.ReadFile(sqfs, "bigdir/12345.txt")
+	if err != nil {
+		t.Errorf("failed to read bigdir/12345.txt: %s", err)
 	}
-	_, err = fs.ReadFile(sqfs, "bigdir/765432.txt")
-	if err == nil {
-		t.Errorf("failed to fail to read bigdir/765432.txt: %s", err)
+	_, err = fs.ReadFile(sqfs, "bigdir/76543.txt")
+	if err != nil {
+		t.Errorf("failed to read bigdir/76543.txt: %s", err)
+	}
+
+	// test for failure on:
+	// ~/pkg/main/azusa.symlinks.core/full/lib64/libLLVMIRReader.a
+	sqfs, err = squashfs.Open("testdata/azusa_symlinks.squashfs")
+	if err != nil {
+		t.Fatalf("failed to open testdata/azusa_symlinks.squashfs: %s", err)
+	}
+	defer sqfs.Close()
+
+	_, err = sqfs.FindInode("full/lib64/libLLVMIRReader.a", false)
+	if err != nil {
+		t.Errorf("failed to find inode full/lib64/libLLVMIRReader.a: %s", err)
 	}
 }

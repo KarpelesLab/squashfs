@@ -528,6 +528,10 @@ func (i *Inode) lookupRelativeInode(name string) (*Inode, error) {
 				}
 				return nil, err
 			}
+			if di != nil && ename > name {
+				// if the dir is indexed and we're past our lookup, it means the file does not exist
+				return nil, fs.ErrNotExist
+			}
 
 			if name == ename {
 				// found, load the inode from its ref
