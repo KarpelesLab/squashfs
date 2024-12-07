@@ -65,7 +65,7 @@ func (i *Inode) ReadDir(input *fuse.ReadIn, out *fuse.DirEntryList, plus bool) e
 	switch i.Type {
 	case 1, 8:
 		// basic dir
-		dr, err := i.sb.dirReader(i)
+		dr, err := i.sb.dirReader(i, nil)
 		if err != nil {
 			return err
 		}
