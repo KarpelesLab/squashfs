@@ -128,4 +128,12 @@ func TestBigdir(t *testing.T) {
 	if err == nil {
 		t.Errorf("failed to fail to read bigdir/999999.txt: %s", err)
 	}
+	_, err = fs.ReadFile(sqfs, "bigdir/123456.txt")
+	if err == nil {
+		t.Errorf("failed to fail to read bigdir/123456.txt: %s", err)
+	}
+	_, err = fs.ReadFile(sqfs, "bigdir/765432.txt")
+	if err == nil {
+		t.Errorf("failed to fail to read bigdir/765432.txt: %s", err)
+	}
 }
