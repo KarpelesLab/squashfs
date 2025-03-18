@@ -507,7 +507,12 @@ func (i *Inode) ReadAt(p []byte, off int64) (int, error) {
 
 // lookupRelativeInode finds the given inode in the directory
 func (i *Inode) lookupRelativeInode(name string) (*Inode, error) {
-	// TODO: handle indexes
+	// Special case for "." - return the current inode
+	if name == "." {
+		return i, nil
+	}
+
+	// Handle directory lookups
 	switch i.Type {
 	case 1, 8:
 		// basic/extended dir, we need to iterate (cache data?)

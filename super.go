@@ -218,8 +218,8 @@ func (s *Superblock) FindInodeUnder(cur *Inode, name string, followSymlinks bool
 	symlinkRedirects := 40 // maximum number of redirects before giving up
 
 	for {
-		if len(name) == 0 {
-			// trailing slash?
+		if len(name) == 0 || name == "." {
+			// trailing slash or explicit current directory
 			return cur, nil
 		}
 		pos := strings.IndexByte(name, '/')
