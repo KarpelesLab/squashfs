@@ -6,24 +6,31 @@ import (
 	"io/fs"
 )
 
+// dirReader provides sequential access to entries in a SquashFS directory.
+// It handles reading directory headers and entries, providing a stream of directory entries.
 type dirReader struct {
-	sb *Superblock
-	r  *io.LimitedReader
+	sb *Superblock       // parent superblock
+	r  *io.LimitedReader // reader for directory data
 
-	count, startBlock, inodeNum uint32
+	count, startBlock, inodeNum uint32 // directory entry metadata
 }
 
+// direntry implements fs.DirEntry interface for SquashFS directory entries.
+// It provides information about a single file or directory within a directory.
 type direntry struct {
-	name string
-	typ  Type // squashfs type
-	inoR inodeRef
-	sb   *Superblock
+	name string      // file name
+	typ  Type        // file type (regular, directory, symlink, etc.)
+	inoR inodeRef    // reference to the inode
+	sb   *Superblock // parent superblock
 }
 
+// DirIndexEntry represents an entry in a directory index.
+// Directory indices allow fast lookups in large directories by providing
+// a sorted index of filenames and their positions in the directory data.
 type DirIndexEntry struct {
-	Index uint32
-	Start uint32
-	Name  string
+	Index uint32 // position in the directory data
+	Start uint32 // block offset
+	Name  string // filename at this index point
 }
 
 func (sb *Superblock) dirReader(i *Inode, seek *DirIndexEntry) (*dirReader, error) {

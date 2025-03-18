@@ -2,23 +2,26 @@ package squashfs
 
 import "io/fs"
 
+// Type represents the type of a file or directory in a SquashFS filesystem.
+// SquashFS has both basic and extended types, where extended types provide additional
+// information or capabilities.
 type Type uint16
 
 const (
-	DirType Type = iota + 1
-	FileType
-	SymlinkType
-	BlockDevType
-	CharDevType
-	FifoType
-	SocketType
-	XDirType
-	XFileType
-	XSymlinkType
-	XBlockDevType
-	XCharDevType
-	XFifoType
-	XSocketType
+	DirType       Type = iota + 1 // Basic directory
+	FileType                      // Basic regular file
+	SymlinkType                   // Symbolic link
+	BlockDevType                  // Block device
+	CharDevType                   // Character device
+	FifoType                      // Named pipe (FIFO)
+	SocketType                    // UNIX domain socket
+	XDirType                      // Extended directory with optional index information
+	XFileType                     // Extended file with additional metadata
+	XSymlinkType                  // Extended symbolic link
+	XBlockDevType                 // Extended block device
+	XCharDevType                  // Extended character device
+	XFifoType                     // Extended named pipe
+	XSocketType                   // Extended UNIX domain socket
 )
 
 // Basic returns the type as a basic type (ie. XDirType.Basic() == DirType)

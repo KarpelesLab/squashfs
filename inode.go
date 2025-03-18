@@ -10,37 +10,40 @@ import (
 	"sync/atomic"
 )
 
+// Inode represents a file, directory, or other filesystem object in a SquashFS filesystem.
+// It contains all the metadata and references to data blocks that make up the file's contents.
+// Inodes implement various interfaces like io.ReaderAt to provide file-like access to their contents.
 type Inode struct {
 	// refcnt is first value to get guaranteed 64bits alignment, if not sync/atomic will panic
-	refcnt uint64 // for fuse
+	refcnt uint64 // reference counter for FUSE support
 
-	sb *Superblock
+	sb *Superblock // parent superblock
 
-	Type    Type
-	Perm    uint16
-	UidIdx  uint16
-	GidIdx  uint16
-	ModTime int32
-	Ino     uint32 // inode number
+	Type    Type   // file type (regular file, directory, symlink, etc.)
+	Perm    uint16 // permission bits
+	UidIdx  uint16 // user ID index (in the ID table)
+	GidIdx  uint16 // group ID index (in the ID table)
+	ModTime int32  // modification time (Unix timestamp)
+	Ino     uint32 // inode number (unique identifier)
 
-	StartBlock uint64
-	NLink      uint32
-	Size       uint64 // Careful, actual on disk size varies depending on type
-	Offset     uint32 // uint16 for directories
-	ParentIno  uint32 // for directories
-	SymTarget  []byte // The target path this symlink points to
-	IdxCount   uint16 // index count for advanced directories
-	XattrIdx   uint32 // xattr table index (if relevant)
-	Sparse     uint64
+	StartBlock uint64 // start of data blocks
+	NLink      uint32 // number of hard links
+	Size       uint64 // file size in bytes (interpretation varies by type)
+	Offset     uint32 // offset within block (uint16 for directories)
+	ParentIno  uint32 // parent directory's inode number (for directories)
+	SymTarget  []byte // target path for symlinks
+	IdxCount   uint16 // count of directory index entries (for extended directories)
+	XattrIdx   uint32 // extended attribute index if present
+	Sparse     uint64 // sparse file information
 
-	// fragment
-	FragBlock uint32
-	FragOfft  uint32
+	// fragment information for file data that doesn't fill a complete block
+	FragBlock uint32 // fragment block index
+	FragOfft  uint32 // offset within fragment block
 
-	// file blocks (some have value 0x1001000)
-	Blocks     []uint32
-	BlocksOfft []uint64
-	DirIndex   []*DirIndexEntry
+	// data block information
+	Blocks     []uint32         // block sizes, possibly with compression flags
+	BlocksOfft []uint64         // offsets for each block from StartBlock
+	DirIndex   []*DirIndexEntry // directory index entries for fast lookups
 }
 
 func (sb *Superblock) GetInode(ino uint64) (*Inode, error) {

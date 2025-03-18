@@ -14,8 +14,15 @@ import (
 const SuperblockSize = 96
 
 // Superblock is the main object representing a squashfs image, and exposes various information about
-// the file. You can ignore most of these and use the object directly to access files/etc, or inspect
-// various elements of the squashfs image.
+// the file system. It implements Go's standard fs.FS, fs.ReadDirFS, and fs.StatFS interfaces, allowing
+// it to be used as a drop-in replacement for any code that works with the standard filesystem interfaces.
+//
+// The Superblock provides access to all the internal data structures of the SquashFS image, including
+// inodes, compression information, and directory structures. For most use cases, you can use the
+// standard fs methods (Open, ReadDir, etc.) without needing to understand the underlying implementation.
+//
+// For advanced use cases, the Superblock also provides direct access to internal structures like
+// inodes and directory entries.
 type Superblock struct {
 	fs    io.ReaderAt
 	order binary.ByteOrder
