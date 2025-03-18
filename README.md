@@ -11,8 +11,10 @@ Since then, golang added `io/fs` and fuse support was moved to a `fuse` tag, whi
 The following tags can be specified on build to enable/disable features:
 
 * `fuse` adds methods to the Inode object to interact with fuse
-* `xz` adds a dependency on xz to support xz compressed files
-* `zstd` adds a dependency on zstd to support zstd compressed files
+* `xz` adds a dependency on github.com/ulikunitz/xz to support XZ compressed files
+* `zstd` adds a dependency on github.com/klauspost/compress/zstd to support ZSTD compressed files
+
+Note: By default, only GZip compression is supported. Other compression formats mentioned in the SquashFS specification (LZMA, LZO, LZ4) are not currently implemented via build tags, but can be added by manually registering decompressors.
 
 # Example usage
 
@@ -96,7 +98,8 @@ Some documentation is available online on SquashFS.
 
 * Read-only implementation of squashfs compatible with Go's `io/fs` interface
 * Optional FUSE support with the `fuse` build tag
-* Support for various compression formats through build tags
+* Support for GZip compression by default, with XZ and ZSTD available via build tags
+* Extensible compression support through the RegisterDecompressor API
 * Directory index support for fast access to files in large directories
 * Symlink support
 

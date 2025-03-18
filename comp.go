@@ -9,17 +9,17 @@ import (
 
 // Compression represents the compression algorithm used in a SquashFS filesystem.
 // Different compression methods can be used to optimize for size or decompression speed.
-// By default, only GZip compression is supported. Use build tags and RegisterDecompressor
-// to enable support for other compression formats.
+// By default, only GZip compression is supported. Additional compression formats can be
+// enabled through build tags or manually registering decompressors.
 type Compression uint16
 
 const (
 	GZip Compression = iota + 1 // GZip compression (zlib, always supported)
-	LZMA                        // LZMA compression (requires lzma build tag)
-	LZO                         // LZO compression (requires lzo build tag)
-	XZ                          // XZ compression (requires xz build tag)
-	LZ4                         // LZ4 compression (requires lz4 build tag)
-	ZSTD                        // Zstandard compression (requires zstd build tag)
+	LZMA                        // LZMA compression (currently not implemented via build tag)
+	LZO                         // LZO compression (currently not implemented via build tag)
+	XZ                          // XZ compression (enabled with "xz" build tag)
+	LZ4                         // LZ4 compression (currently not implemented via build tag)
+	ZSTD                        // Zstandard compression (enabled with "zstd" build tag)
 )
 
 type Decompressor func(buf []byte) ([]byte, error)
