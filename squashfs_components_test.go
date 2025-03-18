@@ -90,7 +90,7 @@ func TestFileOperations(t *testing.T) {
 		t.Errorf("failed to open include/zlib.h: %s", err)
 	} else {
 		defer file.Close()
-		
+
 		// Test Stat on open file
 		fileInfo, err := file.Stat()
 		if err != nil {
@@ -173,7 +173,7 @@ func TestInodeAttributes(t *testing.T) {
 		if !mode.IsRegular() {
 			t.Errorf("include/zlib.h should be a regular file")
 		}
-		
+
 		// Check permission bits - should have at least read permission
 		if mode&0400 == 0 {
 			t.Errorf("include/zlib.h should have read permission")
@@ -239,7 +239,7 @@ func TestErrorCases(t *testing.T) {
 		t.Errorf("failed to open directory: %s", err)
 	} else {
 		defer dir.Close()
-		
+
 		// Reading from a directory should fail
 		buf := make([]byte, 100)
 		_, err = dir.Read(buf)
@@ -274,38 +274,38 @@ func TestFileServerCompatibility(t *testing.T) {
 	var fsys fs.FS = sqfs
 	// Confirm the interface is implemented
 	var _ fs.StatFS = sqfs
-	
+
 	// Access some methods that http.FileServer would use
 	_, err = fs.Stat(fsys, "include/zlib.h")
 	if err != nil {
 		t.Errorf("fs.Stat failed: %s", err)
 	}
-	
+
 	_, err = fs.ReadDir(fsys, "include")
 	if err != nil {
 		t.Errorf("fs.ReadDir failed: %s", err)
 	}
-	
+
 	// Open a file and check that it implements necessary interfaces
 	f, err := fsys.Open("include/zlib.h")
 	if err != nil {
 		t.Errorf("Open failed: %s", err)
 	} else {
 		defer f.Close()
-		
+
 		// Verify we can get stat info
 		_, err = f.Stat()
 		if err != nil {
 			t.Errorf("file.Stat failed: %s", err)
 		}
-		
+
 		// Verify we can read from the file
 		buf := make([]byte, 100)
 		_, err = f.Read(buf)
 		if err != nil && err != io.EOF {
 			t.Errorf("file.Read failed: %s", err)
 		}
-		
+
 		// Try to cast to ReadSeeker (which http.FileServer wants)
 		_, ok := f.(io.ReadSeeker)
 		if !ok {
@@ -326,12 +326,12 @@ func TestDirectoryReadingPerformance(t *testing.T) {
 	// Test with directory indexes (should be fast)
 	// Time how long it takes to find a file at the end of the directory
 	start := make([]string, 0, 10)
-	
+
 	// Add a few test paths
 	start = append(start, "bigdir/98999.txt")
 	start = append(start, "bigdir/99499.txt")
 	start = append(start, "bigdir/99999.txt")
-	
+
 	for _, testPath := range start {
 		_, err := fs.Stat(sqfs, testPath)
 		if err != nil && err != fs.ErrNotExist {
@@ -348,13 +348,13 @@ func TestSquashFSNew(t *testing.T) {
 		t.Fatalf("failed to open test file: %s", err)
 	}
 	defer f.Close()
-	
+
 	// Create SquashFS using New instead of Open
 	sqfs, err := squashfs.New(f)
 	if err != nil {
 		t.Fatalf("failed to create SquashFS with New: %s", err)
 	}
-	
+
 	// Test basic functionality
 	data, err := fs.ReadFile(sqfs, "pkgconfig/zlib.pc")
 	if err != nil {

@@ -102,6 +102,45 @@ Some documentation is available online on SquashFS.
 * Extensible compression support through the RegisterDecompressor API
 * Directory index support for fast access to files in large directories
 * Symlink support
+* CLI tool for exploring and extracting files from SquashFS archives
+
+# CLI Tool
+
+A command-line interface tool is provided in the `cmd/sqfs` directory. This tool allows you to:
+
+* List files in a SquashFS archive
+* View the contents of files inside a SquashFS archive
+* Display detailed information about SquashFS archives
+
+## Usage
+
+```
+sqfs - SquashFS CLI tool
+
+Usage:
+  sqfs ls <squashfs_file> [<path>]          List files in SquashFS (optionally in a specific path)
+  sqfs cat <squashfs_file> <file>           Display contents of a file in SquashFS
+  sqfs info <squashfs_file>                 Display information about a SquashFS archive
+  sqfs help                                 Show this help message
+
+Examples:
+  sqfs ls archive.squashfs                  List all files at the root of archive.squashfs
+  sqfs ls archive.squashfs lib              List all files in the lib directory
+  sqfs cat archive.squashfs dir/file.txt    Display contents of file.txt from archive.squashfs
+  sqfs info archive.squashfs                Show metadata about the SquashFS archive
+```
+
+## Installing the CLI Tool
+
+```
+go install github.com/KarpelesLab/squashfs/cmd/sqfs@latest
+```
+
+To install with additional compression support:
+
+```
+go install -tags "xz zstd" github.com/KarpelesLab/squashfs/cmd/sqfs@latest
+```
 
 # Performance
 

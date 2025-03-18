@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"time"
 
 	"github.com/KarpelesLab/squashfs"
 )
@@ -13,12 +14,14 @@ const usage = `sqfs - SquashFS CLI tool
 Usage:
   sqfs ls <squashfs_file> [<path>]          List files in SquashFS (optionally in a specific path)
   sqfs cat <squashfs_file> <file>           Display contents of a file in SquashFS
+  sqfs info <squashfs_file>                 Display information about a SquashFS archive
   sqfs help                                 Show this help message
 
 Examples:
   sqfs ls archive.squashfs                  List all files at the root of archive.squashfs
   sqfs ls archive.squashfs lib              List all files in the lib directory
   sqfs cat archive.squashfs dir/file.txt    Display contents of file.txt from archive.squashfs
+  sqfs info archive.squashfs                Show metadata about the SquashFS archive
 `
 
 func main() {
@@ -56,6 +59,19 @@ func main() {
 		sqfsPath := os.Args[2]
 		filePath := os.Args[3]
 		err := catFile(sqfsPath, filePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+			os.Exit(1)
+		}
+
+	case "info":
+		if len(os.Args) < 3 {
+			fmt.Println("Error: Missing SquashFS file path")
+			fmt.Println(usage)
+			os.Exit(1)
+		}
+		sqfsPath := os.Args[2]
+		err := showInfo(sqfsPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 			os.Exit(1)
@@ -170,4 +186,77 @@ func catFile(sqfsPath, filePath string) error {
 	}
 
 	return nil
+}
+
+// showInfo displays metadata information about a SquashFS archive
+func showInfo(sqfsPath string) error {
+	sqfs, err := squashfs.Open(sqfsPath)
+	if err != nil {
+		return fmt.Errorf("failed to open SquashFS file: %w", err)
+	}
+	defer sqfs.Close()
+
+	// sqfs is already a *squashfs.Superblock
+	sb := sqfs
+
+	// Format header
+	fmt.Println("SquashFS Archive Information")
+	fmt.Println("===========================")
+
+	// Format creation time
+	createTime := time.Unix(int64(sb.ModTime), 0)
+
+	// Print basic information
+	fmt.Printf("Version:          %d.%d\n", sb.VMajor, sb.VMinor)
+	fmt.Printf("Creation time:    %s\n", createTime.Format(time.RFC1123))
+	fmt.Printf("Block size:       %d bytes\n", sb.BlockSize)
+	fmt.Printf("Compression:      %s\n", sb.Comp)
+	fmt.Printf("Flags:            %s\n", sb.Flags)
+	fmt.Printf("Total size:       %d bytes\n", sb.BytesUsed)
+	fmt.Printf("Inode count:      %d\n", sb.InodeCnt)
+	fmt.Printf("Fragment count:   %d\n", sb.FragCount)
+	fmt.Printf("ID count:         %d\n", sb.IdCount)
+
+	// Count files and directories
+	var fileCount, dirCount, symCount int
+	countFilesAndDirs(sqfs, ".", &fileCount, &dirCount, &symCount)
+
+	fmt.Println("\nContent Summary")
+	fmt.Println("--------------")
+	fmt.Printf("Directories:      %d\n", dirCount)
+	fmt.Printf("Regular files:    %d\n", fileCount)
+	fmt.Printf("Symlinks:         %d\n", symCount)
+
+	return nil
+}
+
+// countFilesAndDirs recursively counts files, directories and symlinks in the archive
+func countFilesAndDirs(fsys fs.FS, dir string, fileCount, dirCount, symCount *int) {
+	entries, err := fs.ReadDir(fsys, dir)
+	if err != nil {
+		return
+	}
+
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+
+		if info.IsDir() {
+			*dirCount++
+			// Recursively count in this directory
+			subdir := dir
+			if dir == "." {
+				subdir = entry.Name()
+			} else {
+				subdir = dir + "/" + entry.Name()
+			}
+			countFilesAndDirs(fsys, subdir, fileCount, dirCount, symCount)
+		} else if info.Mode()&fs.ModeSymlink != 0 {
+			*symCount++
+		} else {
+			*fileCount++
+		}
+	}
 }

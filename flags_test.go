@@ -38,15 +38,15 @@ func TestFlagsOperations(t *testing.T) {
 
 	// Test Has method
 	flags := squashfs.EXPORTABLE | squashfs.UNCOMPRESSED_DATA
-	
+
 	if !flags.Has(squashfs.EXPORTABLE) {
 		t.Errorf("flags should have EXPORTABLE")
 	}
-	
+
 	if !flags.Has(squashfs.UNCOMPRESSED_DATA) {
 		t.Errorf("flags should have UNCOMPRESSED_DATA")
 	}
-	
+
 	if flags.Has(squashfs.NO_FRAGMENTS) {
 		t.Errorf("flags should not have NO_FRAGMENTS")
 	}

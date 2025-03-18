@@ -13,3 +13,6 @@ deps:
 
 test:
 	$(GOROOT)/bin/go test -v
+
+sqfs: cmd/sqfs/*
+	$(GOROOT)/bin/go build ./cmd/sqfs

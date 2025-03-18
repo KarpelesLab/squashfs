@@ -34,25 +34,25 @@ func TestErrorHandling(t *testing.T) {
 	// Test with invalid data (no magic header)
 	invalidData := make([]byte, 100)
 	mockInvalid := &mockReader{data: invalidData}
-	
+
 	_, err := squashfs.New(mockInvalid)
 	if err == nil {
 		t.Errorf("expected error with invalid data, got none")
 	}
-	
+
 	// Test with truncated data
 	// Create a mock header that has valid magic but is truncated
 	truncatedData := []byte{'h', 's', 'q', 's'} // Valid magic in little endian
 	for i := 0; i < 92; i++ {
 		truncatedData = append(truncatedData, 0)
 	}
-	
+
 	mockTruncated := &mockReader{
 		data:   truncatedData,
 		errAt:  20, // Set error after magic but before we can read full header
 		errMsg: io.ErrUnexpectedEOF,
 	}
-	
+
 	_, err = squashfs.New(mockTruncated)
 	if err == nil {
 		t.Errorf("expected error with truncated data, got none")
@@ -63,17 +63,17 @@ func TestErrorHandling(t *testing.T) {
 func TestInvalidSuperblock(t *testing.T) {
 	// Create valid magic but invalid blocksize (mismatch between BlockSize and BlockLog)
 	invalidBlockSizeData := []byte{'h', 's', 'q', 's'} // Valid magic in little endian
-	
+
 	// Fill with zeroes to match superblock size
 	for i := 0; i < 92; i++ {
 		invalidBlockSizeData = append(invalidBlockSizeData, 0)
 	}
-	
+
 	// Set BlockSize to 4096 (bytes 12-16) but BlockLog to 11 (not 2^12) (bytes 22-24)
 	// This creates an invalid combination
 	copy(invalidBlockSizeData[12:16], []byte{0x00, 0x10, 0x00, 0x00}) // 4096 little-endian
 	copy(invalidBlockSizeData[22:24], []byte{0x0B, 0x00})             // 11 little-endian
-	
+
 	mockInvalidBlockSize := &mockReader{data: invalidBlockSizeData}
 	_, err := squashfs.New(mockInvalidBlockSize)
 	if err == nil {
