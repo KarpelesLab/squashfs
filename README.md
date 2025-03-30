@@ -1,4 +1,6 @@
-[![GoDoc](https://godoc.org/github.com/KarpelesLab/squashfs?status.svg)](https://godoc.org/github.com/KarpelesLab/squashfs)
+[![Go Report Card](https://goreportcard.com/badge/github.com/KarpelesLab/squashfs?style=flat-square)](https://goreportcard.com/report/github.com/KarpelesLab/squashfs)
+[![PkgGoDev](https://pkg.go.dev/badge/github.com/KarpelesLab/squashfs)](https://pkg.go.dev/github.com/KarpelesLab/squashfs)
+[![Release](https://img.shields.io/github/release/KarpelesLab/squashfs.svg?style=flat-square)](https://github.com/KarpelesLab/squashfs/releases/latest)
 
 # squashfs
 
