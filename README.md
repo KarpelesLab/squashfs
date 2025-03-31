@@ -16,7 +16,41 @@ The following tags can be specified on build to enable/disable features:
 * `xz` adds a dependency on github.com/ulikunitz/xz to support XZ compressed files
 * `zstd` adds a dependency on github.com/klauspost/compress/zstd to support ZSTD compressed files
 
-Note: By default, only GZip compression is supported. Other compression formats mentioned in the SquashFS specification (LZMA, LZO, LZ4) are not currently implemented via build tags, but can be added by manually registering decompressors.
+By default, only GZip compression is supported as to limit dependency on external libraries. The following can be easily enabled by adding a single line before any call to the library:
+
+### zstd
+
+```go
+import "github.com/klauspost/compress/zstd"
+
+func init() {
+    squashfs.RegisterDecompressor(squashfs.ZSTD, squashfs.MakeDecompressor(zstd.ZipDecompressor()))
+}
+```
+
+### xz
+
+```go
+import (
+    "io"
+
+    "github.com/ulikunitz/xz"
+)
+
+func init() {
+    RegisterDecompressor(XZ, MakeDecompressorErr(func(r io.Reader) (io.ReadCloser, error) {
+        rc, err := xz.NewReader(r)
+        if err != nil {
+            return nil, err
+        }
+        return io.NopCloser(rc), nil
+    }))
+}
+```
+
+### Others
+
+LZMA, LZO and LZ4 are also defined by squashfs and can be enabled similarly.
 
 # Example usage
 
@@ -25,14 +59,14 @@ Note: By default, only GZip compression is supported. Other compression formats 
 ```go
 sqfs, err := squashfs.Open("file.squashfs")
 if err != nil {
-	return err
+    return err
 }
 defer sqfs.Close()
 
 // sqfs can be used as a regular fs.FS
 data, err := fs.ReadFile(sqfs, "dir/file.txt")
 if err != nil {
-	return err
+    return err
 }
 
 // Or serve files over HTTP
@@ -45,19 +79,19 @@ http.Handle("/", http.FileServer(sqfs))
 // List directory contents
 entries, err := sqfs.ReadDir("some/directory")
 if err != nil {
-	return err
+    return err
 }
 
 // Process directory entries
 for _, entry := range entries {
-	fmt.Printf("Name: %s, IsDir: %v\n", entry.Name(), entry.IsDir())
-	
-	// Get more info if needed
-	info, err := entry.Info()
-	if err != nil {
-		return err
-	}
-	fmt.Printf("Size: %d, Mode: %s\n", info.Size(), info.Mode())
+    fmt.Printf("Name: %s, IsDir: %v\n", entry.Name(), entry.IsDir())
+    
+    // Get more info if needed
+    info, err := entry.Info()
+    if err != nil {
+        return err
+    }
+    fmt.Printf("Size: %d, Mode: %s\n", info.Size(), info.Mode())
 }
 ```
 
@@ -67,7 +101,7 @@ for _, entry := range entries {
 // Read a symlink target
 target, err := sqfs.Readlink("path/to/symlink")
 if err != nil {
-	return err
+    return err
 }
 fmt.Printf("Symlink points to: %s\n", target)
 ```
@@ -77,13 +111,13 @@ fmt.Printf("Symlink points to: %s\n", target)
 ```go
 // Register XZ support (requires "xz" build tag)
 import (
-	"github.com/KarpelesLab/squashfs"
-	"github.com/ulikunitz/xz"
+    "github.com/KarpelesLab/squashfs"
+    "github.com/ulikunitz/xz"
 )
 
 // Register XZ decompressor at init time
 func init() {
-	squashfs.RegisterDecompressor(squashfs.XZ, squashfs.MakeDecompressorErr(xz.NewReader))
+    squashfs.RegisterDecompressor(squashfs.XZ, squashfs.MakeDecompressorErr(xz.NewReader))
 }
 ```
 
