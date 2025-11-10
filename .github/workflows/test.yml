@@ -13,7 +13,7 @@ jobs:
     strategy:
       matrix:
         go-version: ['1.24', '1.25']
-        os: [ubuntu-latest, ubuntu-24.04-arm64, macos-latest, windows-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
 
     steps:
     - name: Checkout code
