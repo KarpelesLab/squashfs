@@ -8,11 +8,12 @@ on:
 
 jobs:
   test:
-    name: Test Go ${{ matrix.go-version }}
-    runs-on: ubuntu-latest
+    name: Test Go ${{ matrix.go-version }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         go-version: ['1.22', '1.23', '1.24', '1.25']
+        os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
     - name: Checkout code
@@ -25,10 +26,16 @@ jobs:
       with:
         go-version: ${{ matrix.go-version }}
 
-    - name: Install dependencies
+    - name: Install dependencies (Linux)
+      if: runner.os == 'Linux'
       run: |
         sudo apt-get update
         sudo apt-get install -y libfuse-dev
+
+    - name: Install dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        brew install --cask macfuse
 
     - name: Build
       run: go build -v ./...
@@ -37,12 +44,14 @@ jobs:
       run: go test -v ./...
 
     - name: Run tests (with fuse)
+      if: runner.os != 'Windows'
       run: go test -v -tags fuse ./...
 
     - name: Run tests (with xz and zstd)
       run: go test -v -tags "xz zstd" ./...
 
     - name: Run tests (all tags)
+      if: runner.os != 'Windows'
       run: go test -v -tags "fuse xz zstd" ./...
 
     - name: Run go vet
