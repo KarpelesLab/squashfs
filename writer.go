@@ -34,22 +34,19 @@ type Writer struct {
 	idList  []uint32          // ordered list of uid/gid values
 
 	// Table positions (filled during Finalize)
-	idTableStart      uint64
-	inodeTableStart   uint64
-	dirTableStart     uint64
-	fragTableStart    uint64
-	exportTableStart  uint64
-	xattrIdTableStart uint64
-	bytesUsed         uint64
+	idTableStart     uint64
+	inodeTableStart  uint64
+	dirTableStart    uint64
+	fragTableStart   uint64
+	exportTableStart uint64
+	bytesUsed        uint64
 }
 
 // writerInode represents an inode being built in memory
 type writerInode struct {
-	path     string
-	name     string
-	ino      uint32
-	parent   *writerInode
-	children []*writerInode
+	path string
+	name string
+	ino  uint32
 
 	// File metadata
 	mode     fs.FileMode
@@ -59,12 +56,6 @@ type writerInode struct {
 	gid      uint32
 	nlink    uint32
 	fileType Type
-
-	// For regular files
-	data io.Reader
-
-	// For symlinks
-	linkTarget string
 
 	// For directories
 	entries []*writerInode
@@ -316,37 +307,71 @@ func (w *Writer) writeIDTable() error {
 	return w.write(pointer)
 }
 
+// writeBinary is a helper that writes to a buffer and checks for errors
+func writeBinary(buf *bytes.Buffer, order binary.ByteOrder, data interface{}) error {
+	return binary.Write(buf, order, data)
+}
+
 // serializeInode serializes an inode to bytes (Basic Directory type only for now)
 func (w *Writer) serializeInode(ino *writerInode) ([]byte, error) {
 	buf := &bytes.Buffer{}
 	order := binary.LittleEndian
 
 	// Common inode header
-	binary.Write(buf, order, ino.fileType)         // Type
-	binary.Write(buf, order, uint16(ino.mode&0777)) // Perm (lower 9 bits)
+	if err := writeBinary(buf, order, ino.fileType); err != nil {
+		return nil, err
+	}
+	if err := writeBinary(buf, order, uint16(ino.mode&0777)); err != nil {
+		return nil, err
+	}
 
 	// Get UID/GID indices
 	uidIdx := w.idTable[ino.uid]
 	gidIdx := w.idTable[ino.gid]
-	binary.Write(buf, order, uint16(uidIdx))
-	binary.Write(buf, order, uint16(gidIdx))
-	binary.Write(buf, order, int32(ino.modTime)) // ModTime
-	binary.Write(buf, order, ino.ino)            // Ino
+	if err := writeBinary(buf, order, uint16(uidIdx)); err != nil {
+		return nil, err
+	}
+	if err := writeBinary(buf, order, uint16(gidIdx)); err != nil {
+		return nil, err
+	}
+	if err := writeBinary(buf, order, int32(ino.modTime)); err != nil {
+		return nil, err
+	}
+	if err := writeBinary(buf, order, ino.ino); err != nil {
+		return nil, err
+	}
 
 	// Type-specific data
 	switch ino.fileType {
 	case DirType: // Basic Directory
-		binary.Write(buf, order, uint32(0))         // StartBlock (directory table offset, filled later)
-		binary.Write(buf, order, ino.nlink)         // NLink
-		binary.Write(buf, order, uint16(0))         // Size (directory size in bytes, filled later)
-		binary.Write(buf, order, uint16(0))         // Offset (offset within directory table block)
-		binary.Write(buf, order, uint32(1))         // ParentIno (root's parent is itself)
+		if err := writeBinary(buf, order, uint32(0)); err != nil {
+			return nil, err
+		}
+		if err := writeBinary(buf, order, ino.nlink); err != nil {
+			return nil, err
+		}
+		if err := writeBinary(buf, order, uint16(0)); err != nil {
+			return nil, err
+		}
+		if err := writeBinary(buf, order, uint16(0)); err != nil {
+			return nil, err
+		}
+		if err := writeBinary(buf, order, uint32(1)); err != nil {
+			return nil, err
+		}
 	case FileType: // Basic File
-		binary.Write(buf, order, uint32(0))         // StartBlock
-		binary.Write(buf, order, uint32(0xFFFFFFFF)) // FragBlock (no fragment)
-		binary.Write(buf, order, uint32(0))         // FragOfft
-		binary.Write(buf, order, uint32(ino.size))  // Size
-		// No block list for empty files
+		if err := writeBinary(buf, order, uint32(0)); err != nil {
+			return nil, err
+		}
+		if err := writeBinary(buf, order, uint32(0xFFFFFFFF)); err != nil {
+			return nil, err
+		}
+		if err := writeBinary(buf, order, uint32(0)); err != nil {
+			return nil, err
+		}
+		if err := writeBinary(buf, order, uint32(ino.size)); err != nil {
+			return nil, err
+		}
 	default:
 		return nil, fmt.Errorf("unsupported inode type %d", ino.fileType)
 	}
@@ -386,9 +411,15 @@ func (w *Writer) writeDirectoryTable() error {
 	order := binary.LittleEndian
 
 	// Empty directory - no entries
-	binary.Write(dirBuf, order, uint32(0)) // count = 0 (no entries)
-	binary.Write(dirBuf, order, uint32(0)) // start_block
-	binary.Write(dirBuf, order, uint32(1)) // inode_number (root)
+	if err := writeBinary(dirBuf, order, uint32(0)); err != nil { // count = 0 (no entries)
+		return err
+	}
+	if err := writeBinary(dirBuf, order, uint32(0)); err != nil { // start_block
+		return err
+	}
+	if err := writeBinary(dirBuf, order, uint32(1)); err != nil { // inode_number (root)
+		return err
+	}
 
 	// Write as metadata block
 	_, err := w.writeMetadataBlock(dirBuf.Bytes())
