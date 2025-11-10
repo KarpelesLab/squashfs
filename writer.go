@@ -151,6 +151,13 @@ func NewWriter(w io.Writer, opts ...WriterOption) (*Writer, error) {
 	return writer, nil
 }
 
+// SetCompression sets the compression algorithm to use when writing the filesystem.
+// This can be called at any time before Finalize() is called.
+// The compression affects metadata blocks and data blocks.
+func (w *Writer) SetCompression(comp Compression) {
+	w.comp = comp
+}
+
 // Add adds a file or directory to the filesystem.
 // This method is compatible with fs.WalkDirFunc, allowing it to be used directly
 // with fs.WalkDir:

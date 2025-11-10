@@ -99,3 +99,35 @@ func TestWriterReadback(t *testing.T) {
 	t.Logf("Successfully read back SquashFS v%d.%d", sqfs.VMajor, sqfs.VMinor)
 	t.Logf("Compression: %s, BlockSize: %d, InodeCnt: %d", sqfs.Comp, sqfs.BlockSize, sqfs.InodeCnt)
 }
+
+func TestWriterSetCompression(t *testing.T) {
+	var buf bytes.Buffer
+
+	// Create writer with default compression (GZip)
+	w, err := squashfs.NewWriter(&buf)
+	if err != nil {
+		t.Fatalf("NewWriter failed: %s", err)
+	}
+
+	// Change compression to ZSTD
+	w.SetCompression(squashfs.ZSTD)
+
+	// Finalize to write the filesystem
+	err = w.Finalize()
+	if err != nil {
+		t.Fatalf("Finalize failed: %s", err)
+	}
+
+	// Read it back and verify compression type
+	data := buf.Bytes()
+	sqfs, err := squashfs.New(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("Failed to read back SquashFS: %s", err)
+	}
+
+	if sqfs.Comp != squashfs.ZSTD {
+		t.Errorf("Expected compression ZSTD, got %s", sqfs.Comp)
+	}
+
+	t.Logf("Successfully created SquashFS with %s compression", sqfs.Comp)
+}
