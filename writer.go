@@ -531,7 +531,7 @@ func (w *Writer) writeDirectoryTable() error {
 
 	// Write directory data for all directory inodes
 	for _, inode := range w.inodes {
-		if inode.fileType != DirType {
+		if inode.fileType != DirType && inode.fileType != XDirType {
 			continue
 		}
 
@@ -539,11 +539,7 @@ func (w *Writer) writeDirectoryTable() error {
 		dirStart := dirBuf.Len()
 		inode.dirOffset = uint32(dirStart) // offset within the uncompressed metadata block
 
-		// Sort entries by name for consistency
-		sortInodes(inode.entries)
-
-		// Build directory index for large directories
-		inode.dirIndex = make([]DirIndexEntry, 0)
+		// entries are already sorted from prepareDirectories()
 		const indexInterval = 256 // Create index entry every 256 entries
 
 		// Write directory entries
@@ -559,23 +555,13 @@ func (w *Writer) writeDirectoryTable() error {
 				return err
 			}
 		} else {
-			// For large directories, break into chunks and create index
+			// Write directory entries (index already computed in prepareDirectories)
 			for chunkStart := 0; chunkStart < len(inode.entries); chunkStart += indexInterval {
 				chunkEnd := chunkStart + indexInterval
 				if chunkEnd > len(inode.entries) {
 					chunkEnd = len(inode.entries)
 				}
 				chunk := inode.entries[chunkStart:chunkEnd]
-
-				// Add index entry if this is a large directory
-				if len(inode.entries) > indexInterval {
-					indexPos := dirBuf.Len() - dirStart
-					inode.dirIndex = append(inode.dirIndex, DirIndexEntry{
-						Index: uint32(indexPos),
-						Start: 0, // all in same block
-						Name:  chunk[0].name,
-					})
-				}
 
 				// Write header: count is (number of entries in chunk - 1)
 				if err := writeBinary(dirBuf, order, uint32(len(chunk)-1)); err != nil {
@@ -624,11 +610,6 @@ func (w *Writer) writeDirectoryTable() error {
 
 		// Store the size for the inode
 		inode.size = uint64(dirBuf.Len() - dirStart)
-
-		// Use Extended Directory type if directory has index
-		if len(inode.dirIndex) > 0 {
-			inode.fileType = XDirType
-		}
 	}
 
 	// Write all directory data as metadata blocks
@@ -718,6 +699,58 @@ func (w *Writer) computeInodeOffsets() error {
 	return nil
 }
 
+// prepareDirectories prepares directory structures and determines inode types
+// This must be called before computeInodeOffsets
+func (w *Writer) prepareDirectories() error {
+	const indexInterval = 256
+
+	for _, inode := range w.inodes {
+		if inode.fileType != DirType {
+			continue
+		}
+
+		// Sort entries by name
+		sortInodes(inode.entries)
+
+		// Build directory index for large directories
+		if len(inode.entries) > indexInterval {
+			// This directory needs indexing, use XDirType
+			inode.fileType = XDirType
+			inode.dirIndex = make([]DirIndexEntry, 0)
+
+			// Pre-compute directory layout to build accurate index
+			dirBuf := &bytes.Buffer{}
+
+			for chunkStart := 0; chunkStart < len(inode.entries); chunkStart += indexInterval {
+				chunkEnd := chunkStart + indexInterval
+				if chunkEnd > len(inode.entries) {
+					chunkEnd = len(inode.entries)
+				}
+				chunk := inode.entries[chunkStart:chunkEnd]
+
+				// Record index entry
+				indexPos := dirBuf.Len()
+				inode.dirIndex = append(inode.dirIndex, DirIndexEntry{
+					Index: uint32(indexPos),
+					Start: 0,
+					Name:  chunk[0].name,
+				})
+
+				// Simulate writing header and entries to get correct size
+				// Header: count (4) + startBlock (4) + inodeNum (4) = 12 bytes
+				dirBuf.Write(make([]byte, 12))
+
+				// Each entry: offset (2) + inoDiff (2) + type (2) + size (2) + name
+				for _, entry := range chunk {
+					entrySize := 8 + len(entry.name)
+					dirBuf.Write(make([]byte, entrySize))
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // Finalize writes the complete SquashFS filesystem to the underlying writer.
 // After this method returns, the filesystem image is complete and the Writer
 // should not be used again.
@@ -732,12 +765,17 @@ func (w *Writer) Finalize() error {
 		return err
 	}
 
-	// Pre-compute inode offsets before writing directory table
+	// Prepare directory structures (determines XDirType vs DirType)
+	if err := w.prepareDirectories(); err != nil {
+		return err
+	}
+
+	// Pre-compute inode offsets (now with correct types)
 	if err := w.computeInodeOffsets(); err != nil {
 		return err
 	}
 
-	// Write directory table first (inodes reference it)
+	// Write directory table (inodes reference it)
 	if err := w.writeDirectoryTable(); err != nil {
 		return err
 	}
