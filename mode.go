@@ -20,18 +20,6 @@ const (
 	_S_ISVTX = 0x200
 	_S_ISGID = 0x400
 	_S_ISUID = 0x800
-
-	_S_IRUSR = 0x100
-	_S_IRGRP = 0x20
-	_S_IROTH = 0x4
-
-	_S_IWUSR = 0x80
-	_S_IWGRP = 0x10
-	_S_IWOTH = 0x2
-
-	_S_IXUSR = 0x40
-	_S_IXGRP = 0x8
-	_S_IXOTH = 0x1
 )
 
 func unixToMode(mode uint32) fs.FileMode {
