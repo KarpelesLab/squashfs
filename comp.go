@@ -23,8 +23,10 @@ const (
 )
 
 type Decompressor func(buf []byte) ([]byte, error)
+type Compressor func(buf []byte) ([]byte, error)
 
 var decompressHandler = map[Compression]Decompressor{GZip: MakeDecompressorErr(zlib.NewReader)}
+var compressHandler = map[Compression]Compressor{GZip: zlibCompress}
 
 func (s Compression) String() string {
 	switch s {
@@ -51,11 +53,39 @@ func (s Compression) decompress(buf []byte) ([]byte, error) {
 	return nil, fmt.Errorf("unsupported compression format %s", s.String())
 }
 
+func (s Compression) compress(buf []byte) ([]byte, error) {
+	if f, ok := compressHandler[s]; ok {
+		return f(buf)
+	}
+	return nil, fmt.Errorf("unsupported compression format %s", s.String())
+}
+
+// zlibCompress compresses data using zlib (GZip compression)
+func zlibCompress(buf []byte) ([]byte, error) {
+	var out bytes.Buffer
+	w := zlib.NewWriter(&out)
+	if _, err := w.Write(buf); err != nil {
+		w.Close()
+		return nil, err
+	}
+	if err := w.Close(); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
 // RegisterDecompressor can be used to register a decompressor for squashfs.
 // By default GZip is supported. The method shall take a buffer and return a
 // decompressed buffer.
 func RegisterDecompressor(method Compression, dcomp Decompressor) {
 	decompressHandler[method] = dcomp
+}
+
+// RegisterCompressor can be used to register a compressor for writing squashfs.
+// By default GZip is supported. The method shall take a buffer and return a
+// compressed buffer.
+func RegisterCompressor(method Compression, comp Compressor) {
+	compressHandler[method] = comp
 }
 
 // MakeDecompressor allows using a decompressor made for archive/zip with

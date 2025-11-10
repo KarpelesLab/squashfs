@@ -71,3 +71,31 @@ func TestWriterWithOptions(t *testing.T) {
 		t.Error("No data written")
 	}
 }
+
+func TestWriterReadback(t *testing.T) {
+	var buf bytes.Buffer
+
+	// Create a simple filesystem
+	w, err := squashfs.NewWriter(&buf)
+	if err != nil {
+		t.Fatalf("NewWriter failed: %s", err)
+	}
+
+	// Finalize to write the filesystem
+	err = w.Finalize()
+	if err != nil {
+		t.Fatalf("Finalize failed: %s", err)
+	}
+
+	t.Logf("Created SquashFS image of %d bytes", buf.Len())
+
+	// Try to read it back
+	data := buf.Bytes()
+	sqfs, err := squashfs.New(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("Failed to read back SquashFS: %s", err)
+	}
+
+	t.Logf("Successfully read back SquashFS v%d.%d", sqfs.VMajor, sqfs.VMinor)
+	t.Logf("Compression: %s, BlockSize: %d, InodeCnt: %d", sqfs.Comp, sqfs.BlockSize, sqfs.InodeCnt)
+}
