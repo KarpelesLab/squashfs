@@ -1,0 +1,73 @@
+package squashfs_test
+
+import (
+	"bytes"
+	"io/fs"
+	"os"
+	"testing"
+
+	"github.com/KarpelesLab/squashfs"
+)
+
+func TestWriterBasic(t *testing.T) {
+	var buf bytes.Buffer
+
+	// Create a new writer
+	w, err := squashfs.NewWriter(&buf)
+	if err != nil {
+		t.Fatalf("NewWriter failed: %s", err)
+	}
+
+	// Add files using WalkDir
+	err = fs.WalkDir(os.DirFS("testdata"), ".", w.Add)
+	if err != nil {
+		t.Fatalf("WalkDir failed: %s", err)
+	}
+
+	// Finalize to write the filesystem
+	err = w.Finalize()
+	if err != nil {
+		t.Fatalf("Finalize failed: %s", err)
+	}
+
+	// Verify we wrote something
+	if buf.Len() == 0 {
+		t.Error("No data written")
+	}
+
+	// Verify the magic number
+	data := buf.Bytes()
+	if len(data) < 4 {
+		t.Fatal("Output too small")
+	}
+
+	// Check for squashfs magic (little endian)
+	if data[0] != 'h' || data[1] != 's' || data[2] != 'q' || data[3] != 's' {
+		t.Errorf("Invalid magic number: %x %x %x %x", data[0], data[1], data[2], data[3])
+	}
+
+	t.Logf("Created SquashFS image of %d bytes", buf.Len())
+}
+
+func TestWriterWithOptions(t *testing.T) {
+	var buf bytes.Buffer
+
+	// Create writer with custom options
+	w, err := squashfs.NewWriter(&buf,
+		squashfs.WithBlockSize(65536),
+		squashfs.WithCompression(squashfs.ZSTD),
+	)
+	if err != nil {
+		t.Fatalf("NewWriter failed: %s", err)
+	}
+
+	// Finalize empty filesystem
+	err = w.Finalize()
+	if err != nil {
+		t.Fatalf("Finalize failed: %s", err)
+	}
+
+	if buf.Len() == 0 {
+		t.Error("No data written")
+	}
+}
