@@ -97,7 +97,10 @@ func New(fs io.ReaderAt, options ...Option) (*Superblock, error) {
 
 	sb.rootInoN = uint64(sb.rootIno.Ino)
 
-	sb.readIdTable()
+	err = sb.readIdTable()
+	if err != nil {
+		return nil, err
+	}
 
 	return sb, nil
 }

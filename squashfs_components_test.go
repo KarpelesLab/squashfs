@@ -255,7 +255,7 @@ func TestErrorCases(t *testing.T) {
 	}
 
 	// Test invalid symlink resolution
-	_, err = sqfs.FindInode(string(make([]byte, 1000, 1000)), false)
+	_, err = sqfs.FindInode(string(make([]byte, 1000)), false)
 	if err == nil {
 		t.Errorf("expected error with very long path")
 	}

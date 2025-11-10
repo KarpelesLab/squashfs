@@ -50,12 +50,16 @@ func (i *Inode) publicInodeNum() uint64 {
 }
 
 // fillEntry files a fuse.EntryOut structure with the appropriate information
-func (i *Inode) fillEntry(entry *fuse.EntryOut) {
+func (i *Inode) fillEntry(entry *fuse.EntryOut) error {
 	entry.NodeId = i.publicInodeNum()
 	entry.Attr.Ino = entry.NodeId
-	i.FillAttr(&entry.Attr)
+	err := i.FillAttr(&entry.Attr)
+	if err != nil {
+		return err
+	}
 	entry.SetEntryTimeout(time.Second)
 	entry.SetAttrTimeout(time.Second)
+	return nil
 }
 
 func (i *Inode) ReadDir(input *fuse.ReadIn, out *fuse.DirEntryList, plus bool) error {
@@ -98,7 +102,9 @@ func (i *Inode) ReadDir(input *fuse.ReadIn, out *fuse.DirEntryList, plus bool) e
 					if entry == nil {
 						return nil
 					}
-					i.fillEntry(entry)
+					if err := i.fillEntry(entry); err != nil {
+					return err
+				}
 				}
 				continue
 			}
@@ -114,7 +120,9 @@ func (i *Inode) ReadDir(input *fuse.ReadIn, out *fuse.DirEntryList, plus bool) e
 					if entry == nil {
 						return nil
 					}
-					i.fillEntry(entry)
+					if err := i.fillEntry(entry); err != nil {
+					return err
+				}
 				}
 				continue
 			}
@@ -122,7 +130,7 @@ func (i *Inode) ReadDir(input *fuse.ReadIn, out *fuse.DirEntryList, plus bool) e
 			// make inode ref
 			ino, err := i.sb.GetInodeRef(inoR)
 			if err != nil {
-				log.Printf("failed to load inode: %s")
+				log.Printf("failed to load inode: %s", err)
 				return err
 			}
 
@@ -137,7 +145,9 @@ func (i *Inode) ReadDir(input *fuse.ReadIn, out *fuse.DirEntryList, plus bool) e
 				if entry == nil {
 					return nil
 				}
-				ino.fillEntry(entry)
+				if err := ino.fillEntry(entry); err != nil {
+					return err
+				}
 			}
 		}
 	}
