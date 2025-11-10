@@ -24,7 +24,9 @@ By default, only GZip compression is supported as to limit dependency on externa
 import "github.com/klauspost/compress/zstd"
 
 func init() {
-    squashfs.RegisterDecompressor(squashfs.ZSTD, squashfs.MakeDecompressor(zstd.ZipDecompressor()))
+    squashfs.RegisterCompHandler(squashfs.ZSTD, &squashfs.CompHandler{
+        Decompress: squashfs.MakeDecompressor(zstd.ZipDecompressor()),
+    })
 }
 ```
 
@@ -38,13 +40,15 @@ import (
 )
 
 func init() {
-    RegisterDecompressor(XZ, MakeDecompressorErr(func(r io.Reader) (io.ReadCloser, error) {
-        rc, err := xz.NewReader(r)
-        if err != nil {
-            return nil, err
-        }
-        return io.NopCloser(rc), nil
-    }))
+    squashfs.RegisterCompHandler(squashfs.XZ, &squashfs.CompHandler{
+        Decompress: squashfs.MakeDecompressorErr(func(r io.Reader) (io.ReadCloser, error) {
+            rc, err := xz.NewReader(r)
+            if err != nil {
+                return nil, err
+            }
+            return io.NopCloser(rc), nil
+        }),
+    })
 }
 ```
 
@@ -117,7 +121,9 @@ import (
 
 // Register XZ decompressor at init time
 func init() {
-    squashfs.RegisterDecompressor(squashfs.XZ, squashfs.MakeDecompressorErr(xz.NewReader))
+    squashfs.RegisterCompHandler(squashfs.XZ, &squashfs.CompHandler{
+        Decompress: squashfs.MakeDecompressorErr(xz.NewReader),
+    })
 }
 ```
 
@@ -135,7 +141,7 @@ Some documentation is available online on SquashFS.
 * Read-only implementation of squashfs compatible with Go's `io/fs` interface
 * Optional FUSE support with the `fuse` build tag
 * Support for GZip compression by default, with XZ and ZSTD available via build tags
-* Extensible compression support through the RegisterDecompressor API
+* Extensible compression support through the RegisterCompHandler API
 * Directory index support for fast access to files in large directories
 * Symlink support
 * CLI tool for exploring and extracting files from SquashFS archives
