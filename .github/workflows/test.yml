@@ -1,0 +1,71 @@
+name: Test
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  test:
+    name: Test Go ${{ matrix.go-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go-version: ['1.22', '1.23', '1.24', '1.25']
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ matrix.go-version }}
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libfuse-dev
+
+    - name: Build
+      run: go build -v ./...
+
+    - name: Run tests (default)
+      run: go test -v ./...
+
+    - name: Run tests (with fuse)
+      run: go test -v -tags fuse ./...
+
+    - name: Run tests (with xz and zstd)
+      run: go test -v -tags "xz zstd" ./...
+
+    - name: Run tests (all tags)
+      run: go test -v -tags "fuse xz zstd" ./...
+
+    - name: Run go vet
+      run: go vet ./...
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.25'
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libfuse-dev
+
+    - name: golangci-lint
+      uses: golangci/golangci-lint-action@v6
+      with:
+        version: latest
+        args: --build-tags "fuse xz zstd"
