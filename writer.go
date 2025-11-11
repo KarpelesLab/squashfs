@@ -59,13 +59,14 @@ type writerInode struct {
 	ino  uint32
 
 	// File metadata
-	mode     fs.FileMode
-	size     uint64
-	modTime  int64
-	uid      uint32
-	gid      uint32
-	nlink    uint32
-	fileType Type
+	mode      fs.FileMode
+	size      uint64
+	modTime   int64
+	uid       uint32
+	gid       uint32
+	nlink     uint32
+	fileType  Type
+	symTarget string // symlink target path
 
 	// Source filesystem for reading file data
 	srcFS fs.FS
@@ -220,7 +221,16 @@ func (w *Writer) Add(path string, d fs.DirEntry, err error) error {
 		srcFS:   w.srcFS, // Capture current source filesystem
 	}
 
-	// TODO: Extract uid/gid from info.Sys() if available
+	// Extract uid/gid from info.Sys() if available
+	if sys := info.Sys(); sys != nil {
+		if statT, ok := sys.(interface {
+			Uid() uint32
+			Gid() uint32
+		}); ok {
+			inode.uid = statT.Uid()
+			inode.gid = statT.Gid()
+		}
+	}
 
 	// Determine inode type
 	switch {
@@ -232,10 +242,26 @@ func (w *Writer) Add(path string, d fs.DirEntry, err error) error {
 		inode.fileType = FileType
 	case info.Mode()&fs.ModeSymlink != 0:
 		inode.fileType = SymlinkType
-		// TODO: Read symlink target
+		// Read symlink target
+		if inode.srcFS != nil {
+			target, err := fs.ReadLink(inode.srcFS, path)
+			if err != nil {
+				return fmt.Errorf("failed to read symlink %s: %w", path, err)
+			}
+			inode.symTarget = target
+			inode.size = uint64(len(target))
+		}
+	case info.Mode()&fs.ModeCharDevice != 0:
+		inode.fileType = CharDevType
+	case info.Mode()&fs.ModeDevice != 0:
+		inode.fileType = BlockDevType
+	case info.Mode()&fs.ModeNamedPipe != 0:
+		inode.fileType = FifoType
+	case info.Mode()&fs.ModeSocket != 0:
+		inode.fileType = SocketType
 	default:
-		// TODO: Handle other file types (char, block, fifo, socket)
-		inode.fileType = FileType // treat as regular file for now
+		// Unknown type, treat as regular file
+		inode.fileType = FileType
 	}
 
 	// Add to inode list and map
@@ -506,6 +532,34 @@ func (w *Writer) serializeInode(ino *writerInode) ([]byte, error) {
 			if err := writeBinary(buf, order, blockSize); err != nil {
 				return nil, err
 			}
+		}
+	case SymlinkType: // Basic Symlink
+		// nlink
+		if err := writeBinary(buf, order, ino.nlink); err != nil {
+			return nil, err
+		}
+		// symlink_size - length of target path
+		if err := writeBinary(buf, order, uint32(len(ino.symTarget))); err != nil {
+			return nil, err
+		}
+		// symlink - target path
+		if err := writeBinary(buf, order, []byte(ino.symTarget)); err != nil {
+			return nil, err
+		}
+	case CharDevType, BlockDevType: // Device nodes
+		// nlink
+		if err := writeBinary(buf, order, ino.nlink); err != nil {
+			return nil, err
+		}
+		// rdev - device number (major/minor)
+		// For now, write 0 as we don't extract device numbers from source
+		if err := writeBinary(buf, order, uint32(0)); err != nil {
+			return nil, err
+		}
+	case FifoType, SocketType: // Named pipes and sockets
+		// nlink
+		if err := writeBinary(buf, order, ino.nlink); err != nil {
+			return nil, err
 		}
 	default:
 		return nil, fmt.Errorf("unsupported inode type %d", ino.fileType)
@@ -1181,8 +1235,11 @@ func (w *Writer) Finalize() error {
 		return err
 	}
 
-	// TODO: Write fragment table (can be empty)
-	// TODO: Write export table (can be empty)
+	// Write fragment table (empty for now - no fragment support yet)
+	w.fragTableStart = 0xFFFFFFFFFFFFFFFF // No fragments
+
+	// Write export table (empty for now - not required for basic functionality)
+	w.exportTableStart = 0xFFFFFFFFFFFFFFFF // No export table
 
 	w.bytesUsed = w.offset
 
