@@ -103,8 +103,8 @@ func (i *Inode) ReadDir(input *fuse.ReadIn, out *fuse.DirEntryList, plus bool) e
 						return nil
 					}
 					if err := i.fillEntry(entry); err != nil {
-					return err
-				}
+						return err
+					}
 				}
 				continue
 			}
@@ -121,8 +121,8 @@ func (i *Inode) ReadDir(input *fuse.ReadIn, out *fuse.DirEntryList, plus bool) e
 						return nil
 					}
 					if err := i.fillEntry(entry); err != nil {
-					return err
-				}
+						return err
+					}
 				}
 				continue
 			}

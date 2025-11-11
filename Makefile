@@ -12,7 +12,7 @@ deps:
 	$(GOROOT)/bin/go get -v -t .
 
 test:
-	$(GOROOT)/bin/go test -v
+	$(GOROOT)/bin/go test -v ./...
 
 sqfs: cmd/sqfs/*
 	$(GOROOT)/bin/go build ./cmd/sqfs

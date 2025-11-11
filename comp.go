@@ -84,7 +84,6 @@ func zlibCompress(buf []byte) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
-
 // RegisterDecompressor can be used to register a decompressor for squashfs.
 //
 // Deprecated: Use RegisterCompHandler(method, &CompHandler{Decompress: decompressor}) instead.
