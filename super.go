@@ -146,6 +146,55 @@ func (sb *Superblock) readIdTable() error {
 	return nil
 }
 
+// Bytes serializes the Superblock to a byte slice
+func (s *Superblock) Bytes() []byte {
+	sb := make([]byte, SuperblockSize)
+	order := s.order
+	if order == nil {
+		order = binary.LittleEndian
+	}
+
+	// Magic
+	order.PutUint32(sb[0:4], s.Magic)
+	// Inode count
+	order.PutUint32(sb[4:8], s.InodeCnt)
+	// Mod time
+	order.PutUint32(sb[8:12], uint32(s.ModTime))
+	// Block size
+	order.PutUint32(sb[12:16], s.BlockSize)
+	// Fragment count
+	order.PutUint32(sb[16:20], s.FragCount)
+	// Compression
+	order.PutUint16(sb[20:22], uint16(s.Comp))
+	// Block log
+	order.PutUint16(sb[22:24], s.BlockLog)
+	// Flags
+	order.PutUint16(sb[24:26], uint16(s.Flags))
+	// ID count
+	order.PutUint16(sb[26:28], s.IdCount)
+	// Version
+	order.PutUint16(sb[28:30], s.VMajor)
+	order.PutUint16(sb[30:32], s.VMinor)
+	// Root inode
+	order.PutUint64(sb[32:40], uint64(s.RootInode))
+	// Bytes used
+	order.PutUint64(sb[40:48], s.BytesUsed)
+	// ID table start
+	order.PutUint64(sb[48:56], s.IdTableStart)
+	// Xattr ID table start
+	order.PutUint64(sb[56:64], s.XattrIdTableStart)
+	// Inode table start
+	order.PutUint64(sb[64:72], s.InodeTableStart)
+	// Directory table start
+	order.PutUint64(sb[72:80], s.DirTableStart)
+	// Fragment table start
+	order.PutUint64(sb[80:88], s.FragTableStart)
+	// Export table start
+	order.PutUint64(sb[88:96], s.ExportTableStart)
+
+	return sb
+}
+
 // UnmarshalBinary reads a binary header values into Superblock
 func (s *Superblock) UnmarshalBinary(data []byte) error {
 	if len(data) != SuperblockSize {

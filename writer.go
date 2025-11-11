@@ -47,6 +47,9 @@ type Writer struct {
 
 	// Pre-compressed directory blocks (computed in buildInodeTableToBuffer)
 	precompressedDirBlocks [][]byte
+
+	// Superblock instance (populated during Finalize)
+	sb Superblock
 }
 
 // writerInode represents an inode being built in memory
@@ -1179,18 +1182,19 @@ func (w *Writer) Finalize() error {
 	w.bytesUsed = w.offset
 
 	// Build and write superblock
-	sb := w.buildSuperblock()
+	w.buildSuperblock()
+	sbData := w.sb.Bytes()
 
 	// Write superblock
 	if w.wa != nil {
 		// Update superblock at offset 0
-		_, err := w.wa.WriteAt(sb, 0)
+		_, err := w.wa.WriteAt(sbData, 0)
 		return err
 	}
 
 	// For buffered mode, copy superblock to the beginning of buffer
 	data := w.buf.Bytes()
-	copy(data[0:SuperblockSize], sb)
+	copy(data[0:SuperblockSize], sbData)
 
 	// Write everything to the final writer
 	_, err = w.w.Write(data)
@@ -1198,23 +1202,8 @@ func (w *Writer) Finalize() error {
 }
 
 // buildSuperblock constructs the superblock structure
-func (w *Writer) buildSuperblock() []byte {
-	sb := make([]byte, SuperblockSize)
-	order := binary.LittleEndian
-
-	// Magic
-	order.PutUint32(sb[0:4], 0x73717368)
-	// Inode count
-	order.PutUint32(sb[4:8], w.inodeCount)
-	// Mod time
-	order.PutUint32(sb[8:12], uint32(w.modTime))
-	// Block size
-	order.PutUint32(sb[12:16], w.blockSize)
-	// Fragment count
-	order.PutUint32(sb[16:20], 0) // no fragments yet
-	// Compression
-	order.PutUint16(sb[20:22], uint16(w.comp))
-	// Block log
+func (w *Writer) buildSuperblock() {
+	// Calculate block log
 	blockLog := uint16(0)
 	for i := uint16(0); i < 32; i++ {
 		if (1 << i) == w.blockSize {
@@ -1222,32 +1211,26 @@ func (w *Writer) buildSuperblock() []byte {
 			break
 		}
 	}
-	order.PutUint16(sb[22:24], blockLog)
-	// Flags
-	order.PutUint16(sb[24:26], uint16(w.flags))
-	// ID count
-	order.PutUint16(sb[26:28], uint16(len(w.idList)))
-	// Version
-	order.PutUint16(sb[28:30], 4) // major
-	order.PutUint16(sb[30:32], 0) // minor
-	// Root inode - reference to inode at offset 0 in inode table
-	// inodeRef format: block offset in upper bits, offset within block in lower bits
-	// For first inode, this is just 0
-	order.PutUint64(sb[32:40], 0)
-	// Bytes used
-	order.PutUint64(sb[40:48], w.bytesUsed)
-	// ID table start
-	order.PutUint64(sb[48:56], w.idTableStart)
-	// Xattr ID table start
-	order.PutUint64(sb[56:64], 0xFFFFFFFFFFFFFFFF) // no xattrs
-	// Inode table start
-	order.PutUint64(sb[64:72], w.inodeTableStart)
-	// Directory table start
-	order.PutUint64(sb[72:80], w.dirTableStart)
-	// Fragment table start
-	order.PutUint64(sb[80:88], w.fragTableStart)
-	// Export table start
-	order.PutUint64(sb[88:96], w.exportTableStart)
 
-	return sb
+	// Populate superblock fields
+	w.sb.Magic = 0x73717368
+	w.sb.InodeCnt = w.inodeCount
+	w.sb.ModTime = w.modTime
+	w.sb.BlockSize = w.blockSize
+	w.sb.FragCount = 0 // no fragments yet
+	w.sb.Comp = w.comp
+	w.sb.BlockLog = blockLog
+	w.sb.Flags = w.flags
+	w.sb.IdCount = uint16(len(w.idList))
+	w.sb.VMajor = 4
+	w.sb.VMinor = 0
+	w.sb.RootInode = 0 // reference to inode at offset 0 in inode table
+	w.sb.BytesUsed = w.bytesUsed
+	w.sb.IdTableStart = w.idTableStart
+	w.sb.XattrIdTableStart = 0xFFFFFFFFFFFFFFFF // no xattrs
+	w.sb.InodeTableStart = w.inodeTableStart
+	w.sb.DirTableStart = w.dirTableStart
+	w.sb.FragTableStart = w.fragTableStart
+	w.sb.ExportTableStart = w.exportTableStart
+	w.sb.order = binary.LittleEndian
 }
