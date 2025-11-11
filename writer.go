@@ -592,64 +592,6 @@ type inodePosition struct {
 	offset   uint32 // offset within that block
 }
 
-// directoryChunk represents a chunk of directory entries that share the same inode block
-type directoryChunk struct {
-	entries       []*writerInode
-	startIdx      int
-	firstInodeNum uint32
-	firstBlockNum int
-}
-
-// buildDirectoryChunkData serializes a directory chunk to bytes
-func (w *Writer) buildDirectoryChunkData(chunk *directoryChunk, inodePos map[uint32]inodePosition, useRealOffsets bool) ([]byte, error) {
-	buf := &bytes.Buffer{}
-	order := binary.LittleEndian
-
-	// Write chunk header
-	if err := writeBinary(buf, order, uint32(len(chunk.entries)-1)); err != nil {
-		return nil, err
-	}
-
-	// Write start block position (0 for simulation, real value for final)
-	var startBlock uint32
-	if useRealOffsets {
-		// This will be set correctly in Pass 4
-		startBlock = 0 // Placeholder, will be filled in by caller
-	}
-	if err := writeBinary(buf, order, startBlock); err != nil {
-		return nil, err
-	}
-
-	if err := writeBinary(buf, order, chunk.entries[0].ino); err != nil {
-		return nil, err
-	}
-
-	// Write entries
-	for _, entry := range chunk.entries {
-		offset := uint16(0)
-		if useRealOffsets {
-			offset = uint16(inodePos[entry.ino].offset)
-		}
-		if err := writeBinary(buf, order, offset); err != nil {
-			return nil, err
-		}
-		if err := writeBinary(buf, order, int16(entry.ino)-int16(chunk.entries[0].ino)); err != nil {
-			return nil, err
-		}
-		if err := writeBinary(buf, order, entry.fileType); err != nil {
-			return nil, err
-		}
-		if err := writeBinary(buf, order, uint16(len(entry.name)-1)); err != nil {
-			return nil, err
-		}
-		if err := writeBinary(buf, order, []byte(entry.name)); err != nil {
-			return nil, err
-		}
-	}
-
-	return buf.Bytes(), nil
-}
-
 // buildDirectoryEntryData builds directory entry data for an inode
 func (w *Writer) buildDirectoryEntryData(inode *writerInode, inodePos map[uint32]inodePosition, blockPositions []uint32) ([]byte, error) {
 	if inode.fileType != DirType && inode.fileType != XDirType {
@@ -692,24 +634,19 @@ func (w *Writer) buildDirectoryEntryData(inode *writerInode, inodePos map[uint32
 			chunkEnd++
 		}
 
-		chunk := &directoryChunk{
-			entries:       inode.entries[chunkStart:chunkEnd],
-			startIdx:      chunkStart,
-			firstInodeNum: inode.entries[chunkStart].ino,
-			firstBlockNum: firstEntryBlock,
-		}
+		chunkEntries := inode.entries[chunkStart:chunkEnd]
 
 		// Add directory index entry for XDirType
 		if inode.fileType == XDirType {
 			inode.dirIndex = append(inode.dirIndex, DirIndexEntry{
 				Index: uint32(dirBuf.Len()),
 				Start: 0, // Will be set in computeDirectoryTableOffsets
-				Name:  chunk.entries[0].name,
+				Name:  chunkEntries[0].name,
 			})
 		}
 
 		// Write chunk header
-		if err := writeBinary(dirBuf, order, uint32(len(chunk.entries)-1)); err != nil {
+		if err := writeBinary(dirBuf, order, uint32(len(chunkEntries)-1)); err != nil {
 			return nil, err
 		}
 
@@ -722,16 +659,16 @@ func (w *Writer) buildDirectoryEntryData(inode *writerInode, inodePos map[uint32
 			return nil, err
 		}
 
-		if err := writeBinary(dirBuf, order, chunk.entries[0].ino); err != nil {
+		if err := writeBinary(dirBuf, order, chunkEntries[0].ino); err != nil {
 			return nil, err
 		}
 
 		// Write entries
-		for _, entry := range chunk.entries {
+		for _, entry := range chunkEntries {
 			if err := writeBinary(dirBuf, order, uint16(inodePos[entry.ino].offset)); err != nil {
 				return nil, err
 			}
-			if err := writeBinary(dirBuf, order, int16(entry.ino)-int16(chunk.entries[0].ino)); err != nil {
+			if err := writeBinary(dirBuf, order, int16(entry.ino)-int16(chunkEntries[0].ino)); err != nil {
 				return nil, err
 			}
 			if err := writeBinary(dirBuf, order, entry.fileType); err != nil {
