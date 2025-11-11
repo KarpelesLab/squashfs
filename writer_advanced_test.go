@@ -146,12 +146,12 @@ func TestWriterWithLargeDirectory(t *testing.T) {
 	}
 
 	// Verify we can read first and last files
-	data, err = fs.ReadFile(sqfs, "file_0000.txt")
+	_, err = fs.ReadFile(sqfs, "file_0000.txt")
 	if err != nil {
 		t.Fatalf("Failed to read file_0000.txt: %s", err)
 	}
 
-	data, err = fs.ReadFile(sqfs, "file_0999.txt")
+	_, err = fs.ReadFile(sqfs, "file_0999.txt")
 	if err != nil {
 		t.Fatalf("Failed to read file_0999.txt: %s", err)
 	}
