@@ -347,7 +347,7 @@ func TestSquashFSNew(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open test file: %s", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Create SquashFS using New instead of Open
 	sqfs, err := squashfs.New(f)

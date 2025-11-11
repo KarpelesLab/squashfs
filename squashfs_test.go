@@ -24,7 +24,7 @@ func TestSquashfs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open testdata/zlib-dev.squashfs: %s", err)
 	}
-	defer sqfs.Close()
+	defer func() { _ = sqfs.Close() }()
 
 	data, err := fs.ReadFile(sqfs, "pkgconfig/zlib.pc")
 	if err != nil {
@@ -99,7 +99,7 @@ func TestBigdir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open testdata/bigdir.squashfs: %s", err)
 	}
-	defer sqfs.Close()
+	defer func() { _ = sqfs.Close() }()
 
 	t1 := time.Now()
 	data, err := fs.ReadFile(sqfs, "bigdir/99999.txt")
@@ -143,7 +143,7 @@ func TestBigdir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open testdata/azusa_symlinks.squashfs: %s", err)
 	}
-	defer sqfs.Close()
+	defer func() { _ = sqfs.Close() }()
 
 	_, err = sqfs.FindInode("full/lib64/libLLVMIRReader.a", false)
 	if err != nil {
