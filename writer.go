@@ -34,7 +34,7 @@ type Writer struct {
 	idTable map[uint32]uint32 // uid/gid -> index mapping
 	idList  []uint32          // ordered list of uid/gid values
 
-	// Source filesystem for reading file data
+	// Default source filesystem (captured by Add() into each inode)
 	srcFS fs.FS
 
 	// Table positions (filled during Finalize)
@@ -66,6 +66,9 @@ type writerInode struct {
 	gid      uint32
 	nlink    uint32
 	fileType Type
+
+	// Source filesystem for reading file data
+	srcFS fs.FS
 
 	// For directories
 	entries []*writerInode
@@ -174,8 +177,9 @@ func (w *Writer) SetCompression(comp Compression) {
 	w.comp = comp
 }
 
-// SetSourceFS sets the source filesystem to read file data from.
-// This must be called before Finalize() if you want to write file contents.
+// SetSourceFS sets the default source filesystem to read file data from.
+// This filesystem will be used for subsequent Add() calls.
+// You can call SetSourceFS() multiple times to add files from different filesystems.
 func (w *Writer) SetSourceFS(srcFS fs.FS) {
 	w.srcFS = srcFS
 }
@@ -213,6 +217,7 @@ func (w *Writer) Add(path string, d fs.DirEntry, err error) error {
 		size:    uint64(info.Size()),
 		modTime: info.ModTime().Unix(),
 		nlink:   1,
+		srcFS:   w.srcFS, // Capture current source filesystem
 	}
 
 	// TODO: Extract uid/gid from info.Sys() if available
@@ -1061,12 +1066,12 @@ func (w *Writer) writeFileData() error {
 		}
 
 		// Read file data from source filesystem
-		if w.srcFS == nil {
+		if inode.srcFS == nil {
 			// No source FS, write empty file
 			continue
 		}
 
-		data, err := fs.ReadFile(w.srcFS, inode.path)
+		data, err := fs.ReadFile(inode.srcFS, inode.path)
 		if err != nil {
 			return fmt.Errorf("failed to read %s: %w", inode.path, err)
 		}
