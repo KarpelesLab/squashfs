@@ -16,7 +16,7 @@ func xzCompress(buf []byte) ([]byte, error) {
 		return nil, err
 	}
 	if _, err := w.Write(buf); err != nil {
-		w.Close()
+		_ = w.Close()
 		return nil, err
 	}
 	if err := w.Close(); err != nil {

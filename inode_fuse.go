@@ -52,7 +52,7 @@ func (i *Inode) publicInodeNum() uint64 {
 // fillEntry files a fuse.EntryOut structure with the appropriate information
 func (i *Inode) fillEntry(entry *fuse.EntryOut) error {
 	entry.NodeId = i.publicInodeNum()
-	entry.Attr.Ino = entry.NodeId
+	entry.Ino = entry.NodeId
 	err := i.FillAttr(&entry.Attr)
 	if err != nil {
 		return err

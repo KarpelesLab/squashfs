@@ -404,7 +404,8 @@ func (i *Inode) ReadAt(p []byte, off int64) (int, error) {
 			var buf []byte
 
 			// read block
-			if i.Blocks[block] == 0xffffffff {
+			switch i.Blocks[block] {
+			case 0xffffffff:
 				// this is a fragment, need to decode fragment
 				//log.Printf("frag table offset=%d", i.sb.FragTableStart)
 
@@ -461,10 +462,10 @@ func (i *Inode) ReadAt(p []byte, off int64) (int, error) {
 				if i.FragOfft != 0 {
 					buf = buf[i.FragOfft:]
 				}
-			} else if i.Blocks[block] == 0 {
+			case 0:
 				// this part of the file contains only zeroes
 				buf = make([]byte, i.sb.BlockSize)
-			} else {
+			default:
 				buf = make([]byte, i.Blocks[block]&0xfffff)
 				_, err := i.sb.fs.ReadAt(buf, int64(i.StartBlock+i.BlocksOfft[block]))
 				if err != nil {

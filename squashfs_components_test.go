@@ -50,7 +50,7 @@ func TestFileOperations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open testdata/zlib-dev.squashfs: %s", err)
 	}
-	defer sqfs.Close()
+	defer func() { _ = sqfs.Close() }()
 
 	// Test ReadDir
 	entries, err := sqfs.ReadDir("include")
@@ -89,7 +89,7 @@ func TestFileOperations(t *testing.T) {
 	if err != nil {
 		t.Errorf("failed to open include/zlib.h: %s", err)
 	} else {
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 
 		// Test Stat on open file
 		fileInfo, err := file.Stat()
@@ -129,7 +129,7 @@ func TestSymlinkHandling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open testdata/azusa_symlinks.squashfs: %s", err)
 	}
-	defer sqfs.Close()
+	defer func() { _ = sqfs.Close() }()
 
 	// Test finding a file through a path that might contain symlinks
 	// Note: Just verifying that the FindInode function works on the test data
@@ -146,7 +146,7 @@ func TestInodeAttributes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open testdata/zlib-dev.squashfs: %s", err)
 	}
-	defer sqfs.Close()
+	defer func() { _ = sqfs.Close() }()
 
 	// Test UID/GID access
 	ino, err := sqfs.FindInode("include/zlib.h", false)
@@ -187,7 +187,7 @@ func TestSubFS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open testdata/zlib-dev.squashfs: %s", err)
 	}
-	defer sqfs.Close()
+	defer func() { _ = sqfs.Close() }()
 
 	// Create a sub-filesystem for the include directory
 	subFS, err := fs.Sub(sqfs, "include")
@@ -225,7 +225,7 @@ func TestErrorCases(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open testdata/zlib-dev.squashfs: %s", err)
 	}
-	defer sqfs.Close()
+	defer func() { _ = sqfs.Close() }()
 
 	// Test invalid path
 	_, err = sqfs.Open("..")
@@ -238,7 +238,7 @@ func TestErrorCases(t *testing.T) {
 	if err != nil {
 		t.Errorf("failed to open directory: %s", err)
 	} else {
-		defer dir.Close()
+		defer func() { _ = dir.Close() }()
 
 		// Reading from a directory should fail
 		buf := make([]byte, 100)
@@ -268,7 +268,7 @@ func TestFileServerCompatibility(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open testdata/zlib-dev.squashfs: %s", err)
 	}
-	defer sqfs.Close()
+	defer func() { _ = sqfs.Close() }()
 
 	// Verify that the interface matches what http.FileServer expects
 	var fsys fs.FS = sqfs
@@ -291,7 +291,7 @@ func TestFileServerCompatibility(t *testing.T) {
 	if err != nil {
 		t.Errorf("Open failed: %s", err)
 	} else {
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 
 		// Verify we can get stat info
 		_, err = f.Stat()
@@ -321,7 +321,7 @@ func TestDirectoryReadingPerformance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open testdata/bigdir.squashfs: %s", err)
 	}
-	defer sqfs.Close()
+	defer func() { _ = sqfs.Close() }()
 
 	// Test with directory indexes (should be fast)
 	// Time how long it takes to find a file at the end of the directory

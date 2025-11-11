@@ -115,13 +115,13 @@ func Open(file string, options ...Option) (*Superblock, error) {
 	}
 	sb, err := New(f, options...)
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, err
 	}
 	sb.clos = f
 
 	clean := func(sb *Superblock) {
-		sb.Close()
+		_ = sb.Close()
 	}
 	runtime.SetFinalizer(sb, clean)
 	return sb, nil

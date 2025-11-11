@@ -75,7 +75,7 @@ func zlibCompress(buf []byte) ([]byte, error) {
 	var out bytes.Buffer
 	w := zlib.NewWriter(&out)
 	if _, err := w.Write(buf); err != nil {
-		w.Close()
+		_ = w.Close()
 		return nil, err
 	}
 	if err := w.Close(); err != nil {
@@ -112,7 +112,7 @@ func MakeDecompressor(dec func(r io.Reader) io.ReadCloser) Decompressor {
 	return func(buf []byte) ([]byte, error) {
 		r := bytes.NewReader(buf)
 		p := dec(r)
-		defer p.Close()
+		defer func() { _ = p.Close() }()
 		w := &bytes.Buffer{}
 		_, err := io.Copy(w, p)
 		return w.Bytes(), err
@@ -132,7 +132,7 @@ func MakeDecompressorErr(dec func(r io.Reader) (io.ReadCloser, error)) Decompres
 		if err != nil {
 			return nil, err
 		}
-		defer p.Close()
+		defer func() { _ = p.Close() }()
 		w := &bytes.Buffer{}
 		_, err = io.Copy(w, p)
 		return w.Bytes(), err
