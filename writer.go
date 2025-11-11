@@ -12,6 +12,16 @@ import (
 // Writer creates SquashFS filesystem images.
 // It builds the filesystem structure in memory and streams the final
 // image to an io.Writer when Finalize() is called.
+//
+// The Writer maintains an in-memory representation of the filesystem tree,
+// including all inodes, directory structures, and file metadata. When Finalize()
+// is called, it performs the following steps:
+//  1. Writes file data blocks
+//  2. Computes directory structures and indices
+//  3. Builds and writes the inode table
+//  4. Writes the directory table
+//  5. Writes the ID (UID/GID) table
+//  6. Updates the superblock with final offsets
 type Writer struct {
 	w      io.Writer
 	wa     io.WriterAt   // set if w implements WriterAt
@@ -45,14 +55,17 @@ type Writer struct {
 	exportTableStart uint64
 	bytesUsed        uint64
 
-	// Pre-compressed directory blocks (computed in buildInodeTableToBuffer)
+	// Pre-compressed directory blocks (computed during inode table building)
 	precompressedDirBlocks [][]byte
 
 	// Superblock instance (populated during Finalize)
 	sb Superblock
 }
 
-// writerInode represents an inode being built in memory
+// writerInode represents an inode being built in memory.
+// Each inode corresponds to a file, directory, symlink, or special file
+// in the filesystem. The inode contains metadata and references to the
+// actual data (for files) or directory entries (for directories).
 type writerInode struct {
 	path string
 	name string
@@ -75,18 +88,18 @@ type writerInode struct {
 	entries []*writerInode
 	parent  *writerInode
 
-	// Directory table info (filled during Finalize)
+	// Directory table info (computed during inode table building)
 	dirOffset uint32          // offset in directory table
-	dirIndex  []DirIndexEntry // directory index for large directories
-	dirData   []byte          // serialized directory data (built before writing inode table)
+	dirIndex  []DirIndexEntry // directory index for large directories (XDirType only)
+	dirData   []byte          // serialized directory data
 
-	// File data info (filled during Finalize)
-	dataBlocks []uint32 // block sizes for file data
-	startBlock uint64   // start position of file data
+	// File data info (filled during writeFileData)
+	dataBlocks []uint32 // block sizes for file data (with compression flag in high bit)
+	startBlock uint64   // start position of file data in the image
 
-	// Inode table info (filled during computeInodeOffsets)
-	inodeBlockStart uint32 // byte offset from inode table start to this inode's block
-	inodeOffset     uint32 // offset within the block
+	// Inode table info (computed during inode position calculation)
+	inodeBlockStart uint32 // byte offset from inode table start to this inode's metadata block
+	inodeOffset     uint32 // offset within the metadata block
 }
 
 // WriterOption configures a Writer
@@ -573,17 +586,447 @@ const (
 	indexInterval        = 256  // Directory index interval
 )
 
-// buildInodeTableToBuffer builds the complete inode table in a buffer,
-// computing and recording inode positions and directory offsets
-func (w *Writer) buildInodeTableToBuffer() ([]byte, error) {
+// inodePosition tracks where an inode is located in the metadata blocks
+type inodePosition struct {
+	blockNum int    // which metadata block (0, 1, 2, ...)
+	offset   uint32 // offset within that block
+}
+
+// directoryChunk represents a chunk of directory entries that share the same inode block
+type directoryChunk struct {
+	entries       []*writerInode
+	startIdx      int
+	firstInodeNum uint32
+	firstBlockNum int
+}
+
+// buildDirectoryChunkData serializes a directory chunk to bytes
+func (w *Writer) buildDirectoryChunkData(chunk *directoryChunk, inodePos map[uint32]inodePosition, useRealOffsets bool) ([]byte, error) {
+	buf := &bytes.Buffer{}
 	order := binary.LittleEndian
 
-	// PASS 1: Iteratively determine inode positions (need iteration because dirIndex size depends on chunk boundaries)
-	type inodePosition struct {
-		blockNum int    // which metadata block (0, 1, 2, ...)
-		offset   uint32 // offset within that block
+	// Write chunk header
+	if err := writeBinary(buf, order, uint32(len(chunk.entries)-1)); err != nil {
+		return nil, err
 	}
+
+	// Write start block position (0 for simulation, real value for final)
+	var startBlock uint32
+	if useRealOffsets {
+		// This will be set correctly in Pass 4
+		startBlock = 0 // Placeholder, will be filled in by caller
+	}
+	if err := writeBinary(buf, order, startBlock); err != nil {
+		return nil, err
+	}
+
+	if err := writeBinary(buf, order, chunk.entries[0].ino); err != nil {
+		return nil, err
+	}
+
+	// Write entries
+	for _, entry := range chunk.entries {
+		offset := uint16(0)
+		if useRealOffsets {
+			offset = uint16(inodePos[entry.ino].offset)
+		}
+		if err := writeBinary(buf, order, offset); err != nil {
+			return nil, err
+		}
+		if err := writeBinary(buf, order, int16(entry.ino)-int16(chunk.entries[0].ino)); err != nil {
+			return nil, err
+		}
+		if err := writeBinary(buf, order, entry.fileType); err != nil {
+			return nil, err
+		}
+		if err := writeBinary(buf, order, uint16(len(entry.name)-1)); err != nil {
+			return nil, err
+		}
+		if err := writeBinary(buf, order, []byte(entry.name)); err != nil {
+			return nil, err
+		}
+	}
+
+	return buf.Bytes(), nil
+}
+
+// buildDirectoryEntryData builds directory entry data for an inode
+func (w *Writer) buildDirectoryEntryData(inode *writerInode, inodePos map[uint32]inodePosition, blockPositions []uint32) ([]byte, error) {
+	if inode.fileType != DirType && inode.fileType != XDirType {
+		return nil, nil
+	}
+
+	dirBuf := &bytes.Buffer{}
+	order := binary.LittleEndian
+
+	if len(inode.entries) == 0 {
+		// Empty directory
+		if err := writeBinary(dirBuf, order, uint32(0)); err != nil {
+			return nil, err
+		}
+		if err := writeBinary(dirBuf, order, uint32(0)); err != nil {
+			return nil, err
+		}
+		if err := writeBinary(dirBuf, order, inode.ino); err != nil {
+			return nil, err
+		}
+		return dirBuf.Bytes(), nil
+	}
+
+	// Reset directory index for XDirType
+	if inode.fileType == XDirType {
+		inode.dirIndex = make([]DirIndexEntry, 0)
+	}
+
+	// Build chunks
+	entryIdx := 0
+	for entryIdx < len(inode.entries) {
+		chunkStart := entryIdx
+		firstEntryBlock := inodePos[inode.entries[chunkStart].ino].blockNum
+
+		// Find end of chunk: stop at block boundary or 256 entries
+		chunkEnd := chunkStart
+		for chunkEnd < len(inode.entries) &&
+			(chunkEnd-chunkStart) < indexInterval &&
+			inodePos[inode.entries[chunkEnd].ino].blockNum == firstEntryBlock {
+			chunkEnd++
+		}
+
+		chunk := &directoryChunk{
+			entries:       inode.entries[chunkStart:chunkEnd],
+			startIdx:      chunkStart,
+			firstInodeNum: inode.entries[chunkStart].ino,
+			firstBlockNum: firstEntryBlock,
+		}
+
+		// Add directory index entry for XDirType
+		if inode.fileType == XDirType {
+			inode.dirIndex = append(inode.dirIndex, DirIndexEntry{
+				Index: uint32(dirBuf.Len()),
+				Start: 0, // Will be set in computeDirectoryTableOffsets
+				Name:  chunk.entries[0].name,
+			})
+		}
+
+		// Write chunk header
+		if err := writeBinary(dirBuf, order, uint32(len(chunk.entries)-1)); err != nil {
+			return nil, err
+		}
+
+		// Write block position (from blockPositions if available)
+		blockPos := uint32(0)
+		if blockPositions != nil && firstEntryBlock < len(blockPositions) {
+			blockPos = blockPositions[firstEntryBlock]
+		}
+		if err := writeBinary(dirBuf, order, blockPos); err != nil {
+			return nil, err
+		}
+
+		if err := writeBinary(dirBuf, order, chunk.entries[0].ino); err != nil {
+			return nil, err
+		}
+
+		// Write entries
+		for _, entry := range chunk.entries {
+			if err := writeBinary(dirBuf, order, uint16(inodePos[entry.ino].offset)); err != nil {
+				return nil, err
+			}
+			if err := writeBinary(dirBuf, order, int16(entry.ino)-int16(chunk.entries[0].ino)); err != nil {
+				return nil, err
+			}
+			if err := writeBinary(dirBuf, order, entry.fileType); err != nil {
+				return nil, err
+			}
+			if err := writeBinary(dirBuf, order, uint16(len(entry.name)-1)); err != nil {
+				return nil, err
+			}
+			if err := writeBinary(dirBuf, order, []byte(entry.name)); err != nil {
+				return nil, err
+			}
+		}
+
+		entryIdx = chunkEnd
+	}
+
+	return dirBuf.Bytes(), nil
+}
+
+// computeInodePositions determines which metadata block each inode will be in
+// Returns a map of inode number to position (block number and offset within block)
+func (w *Writer) computeInodePositions() (map[uint32]inodePosition, error) {
 	inodePos := make(map[uint32]inodePosition)
+	currentBlock := 0
+	blockBuf := &bytes.Buffer{}
+
+	for _, ino := range w.inodes {
+		data, err := w.serializeInode(ino)
+		if err != nil {
+			return nil, err
+		}
+
+		// Start new block if current one would overflow
+		if blockBuf.Len() > 0 && blockBuf.Len()+len(data) > maxMetadataBlockSize {
+			currentBlock++
+			blockBuf.Reset()
+		}
+
+		inodePos[ino.ino] = inodePosition{
+			blockNum: currentBlock,
+			offset:   uint32(blockBuf.Len()),
+		}
+
+		blockBuf.Write(data)
+	}
+
+	return inodePos, nil
+}
+
+// computeBlockPositions calculates the byte offsets of each metadata block after compression
+func (w *Writer) computeBlockPositions() ([]uint32, error) {
+	tempBuf := &bytes.Buffer{}
+	blockBuf := &bytes.Buffer{}
+	blockPositions := []uint32{0}
+
+	for _, ino := range w.inodes {
+		data, err := w.serializeInode(ino)
+		if err != nil {
+			return nil, err
+		}
+
+		if blockBuf.Len() > 0 && blockBuf.Len()+len(data) > maxMetadataBlockSize {
+			blockData := blockBuf.Bytes()
+			compressed, _ := w.comp.compress(blockData)
+
+			var blockSize int
+			if compressed != nil && len(compressed) < len(blockData) {
+				blockSize = 2 + len(compressed)
+			} else {
+				blockSize = 2 + len(blockData)
+			}
+
+			tempBuf.Write(make([]byte, blockSize))
+			blockPositions = append(blockPositions, uint32(tempBuf.Len()))
+			blockBuf.Reset()
+		}
+
+		blockBuf.Write(data)
+	}
+
+	return blockPositions, nil
+}
+
+// serializeInodesToBuffer writes all inodes as compressed metadata blocks
+func (w *Writer) serializeInodesToBuffer() ([]byte, error) {
+	result := &bytes.Buffer{}
+	blockBuf := &bytes.Buffer{}
+
+	for _, ino := range w.inodes {
+		data, err := w.serializeInode(ino)
+		if err != nil {
+			return nil, err
+		}
+
+		if blockBuf.Len() > 0 && blockBuf.Len()+len(data) > maxMetadataBlockSize {
+			if err := w.writeCompressedMetadataBlock(result, blockBuf.Bytes()); err != nil {
+				return nil, err
+			}
+			blockBuf.Reset()
+		}
+
+		blockBuf.Write(data)
+	}
+
+	// Write final block
+	if blockBuf.Len() > 0 {
+		if err := w.writeCompressedMetadataBlock(result, blockBuf.Bytes()); err != nil {
+			return nil, err
+		}
+	}
+
+	return result.Bytes(), nil
+}
+
+// writeCompressedMetadataBlock compresses and writes a metadata block to the buffer
+func (w *Writer) writeCompressedMetadataBlock(buf *bytes.Buffer, blockData []byte) error {
+	compressed, _ := w.comp.compress(blockData)
+
+	header := make([]byte, 2)
+	if compressed != nil && len(compressed) < len(blockData) {
+		// Write compressed
+		binary.LittleEndian.PutUint16(header, uint16(len(compressed)))
+		buf.Write(header)
+		buf.Write(compressed)
+	} else {
+		// Write uncompressed
+		binary.LittleEndian.PutUint16(header, uint16(len(blockData))|0x8000)
+		buf.Write(header)
+		buf.Write(blockData)
+	}
+
+	return nil
+}
+
+// simulateDirectoryIndices simulates building directory data to compute Index values for XDirType
+func (w *Writer) simulateDirectoryIndices(inodePos map[uint32]inodePosition) error {
+	order := binary.LittleEndian
+
+	for _, inode := range w.inodes {
+		if inode.fileType != XDirType || len(inodePos) == 0 {
+			continue
+		}
+
+		dirBuf := &bytes.Buffer{}
+		inode.dirIndex = make([]DirIndexEntry, 0)
+
+		entryIdx := 0
+		for entryIdx < len(inode.entries) {
+			chunkStart := entryIdx
+			firstEntryBlock := inodePos[inode.entries[chunkStart].ino].blockNum
+
+			chunkEnd := chunkStart
+			for chunkEnd < len(inode.entries) &&
+				(chunkEnd-chunkStart) < indexInterval &&
+				inodePos[inode.entries[chunkEnd].ino].blockNum == firstEntryBlock {
+				chunkEnd++
+			}
+
+			chunk := inode.entries[chunkStart:chunkEnd]
+
+			inode.dirIndex = append(inode.dirIndex, DirIndexEntry{
+				Index: uint32(dirBuf.Len()),
+				Start: 0,
+				Name:  chunk[0].name,
+			})
+
+			// Simulate writing the chunk to advance the position
+			if err := writeBinary(dirBuf, order, uint32(len(chunk)-1)); err != nil {
+				return err
+			}
+			if err := writeBinary(dirBuf, order, uint32(0)); err != nil {
+				return err
+			}
+			if err := writeBinary(dirBuf, order, chunk[0].ino); err != nil {
+				return err
+			}
+			for _, entry := range chunk {
+				if err := writeBinary(dirBuf, order, uint16(0)); err != nil {
+					return err
+				}
+				if err := writeBinary(dirBuf, order, int16(entry.ino)-int16(chunk[0].ino)); err != nil {
+					return err
+				}
+				if err := writeBinary(dirBuf, order, entry.fileType); err != nil {
+					return err
+				}
+				if err := writeBinary(dirBuf, order, uint16(len(entry.name)-1)); err != nil {
+					return err
+				}
+				if err := writeBinary(dirBuf, order, []byte(entry.name)); err != nil {
+					return err
+				}
+			}
+
+			entryIdx = chunkEnd
+		}
+	}
+
+	return nil
+}
+
+// inodePositionsEqual checks if two inode position maps are equal
+func (w *Writer) inodePositionsEqual(a, b map[uint32]inodePosition) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if bv, ok := b[k]; !ok || bv != v {
+			return false
+		}
+	}
+	return true
+}
+
+// buildDirectoryDataForAllInodes builds directory data for all directory inodes
+func (w *Writer) buildDirectoryDataForAllInodes(inodePos map[uint32]inodePosition, blockPositions []uint32) error {
+	globalDirOffset := uint32(0)
+
+	for _, inode := range w.inodes {
+		if inode.fileType != DirType && inode.fileType != XDirType {
+			continue
+		}
+
+		inode.dirOffset = globalDirOffset
+		dirData, err := w.buildDirectoryEntryData(inode, inodePos, blockPositions)
+		if err != nil {
+			return err
+		}
+
+		inode.dirData = dirData
+		inode.size = uint64(len(dirData))
+		globalDirOffset += uint32(len(dirData))
+	}
+
+	return nil
+}
+
+// blockPositionsEqual checks if two block position slices are equal
+func (w *Writer) blockPositionsEqual(a, b []uint32) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// rebuildDirectoryDataWithBlockPositions rebuilds directory data with updated block positions
+// and validates that directory sizes remain unchanged
+func (w *Writer) rebuildDirectoryDataWithBlockPositions(inodePos map[uint32]inodePosition, blockPositions []uint32) error {
+	globalDirOffset := uint32(0)
+
+	for _, inode := range w.inodes {
+		if inode.fileType != DirType && inode.fileType != XDirType {
+			continue
+		}
+
+		oldSize := inode.size
+		inode.dirOffset = globalDirOffset
+
+		dirData, err := w.buildDirectoryEntryData(inode, inodePos, blockPositions)
+		if err != nil {
+			return err
+		}
+
+		inode.dirData = dirData
+		newSize := uint64(len(dirData))
+		inode.size = newSize
+
+		// Validate size hasn't changed
+		if oldSize != 0 && oldSize != newSize {
+			return fmt.Errorf("directory size changed from %d to %d for inode %d", oldSize, newSize, inode.ino)
+		}
+
+		globalDirOffset += uint32(len(dirData))
+	}
+
+	return nil
+}
+
+// buildInodeTableToBuffer builds the complete inode table in a buffer,
+// computing and recording inode positions and directory offsets.
+//
+// This function performs multiple passes:
+// 1. Compute inode positions (which metadata block each inode is in)
+// 2. Build initial directory data
+// 3. Iteratively compute block positions and rebuild directory data until convergence
+// 4. Serialize final inodes to buffer
+func (w *Writer) buildInodeTableToBuffer() ([]byte, error) {
+	// PASS 1: Iteratively determine inode positions
+	// (Iteration needed because dirIndex size depends on chunk boundaries)
+	var inodePos map[uint32]inodePosition
 
 	// Clear directory data temporarily
 	for _, ino := range w.inodes {
@@ -591,7 +1034,7 @@ func (w *Writer) buildInodeTableToBuffer() ([]byte, error) {
 			ino.size = 0
 			ino.dirOffset = 0
 			if ino.fileType == XDirType {
-				ino.dirIndex = nil // will be set in iteration
+				ino.dirIndex = nil
 			}
 		}
 	}
@@ -604,102 +1047,20 @@ func (w *Writer) buildInodeTableToBuffer() ([]byte, error) {
 			prevInodePos[k] = v
 		}
 
-		// Pre-allocate dirIndex entries based on current inode positions
-		// Need to simulate directory data building to get correct Index values
-		for _, inode := range w.inodes {
-			if inode.fileType != XDirType {
-				continue
-			}
-
-			// Simulate building directory data to calculate Index values
-			dirBuf := &bytes.Buffer{}
-			inode.dirIndex = make([]DirIndexEntry, 0)
-			entryIdx := 0
-			for entryIdx < len(inode.entries) {
-				chunkStart := entryIdx
-				firstEntryBlock := inodePos[inode.entries[chunkStart].ino].blockNum
-
-				chunkEnd := chunkStart
-				for chunkEnd < len(inode.entries) &&
-					(chunkEnd-chunkStart) < indexInterval &&
-					inodePos[inode.entries[chunkEnd].ino].blockNum == firstEntryBlock {
-					chunkEnd++
-				}
-
-				chunk := inode.entries[chunkStart:chunkEnd]
-
-				inode.dirIndex = append(inode.dirIndex, DirIndexEntry{
-					Index: uint32(dirBuf.Len()),
-					Start: 0, // directory table block position (0 for first block)
-					Name:  chunk[0].name,
-				})
-
-				// Simulate writing the chunk to dirBuf to advance the position
-				if err := writeBinary(dirBuf, order, uint32(len(chunk)-1)); err != nil {
-					return nil, err
-				}
-				if err := writeBinary(dirBuf, order, uint32(0)); err != nil {
-					return nil, err
-				}
-				if err := writeBinary(dirBuf, order, chunk[0].ino); err != nil {
-					return nil, err
-				}
-				for _, entry := range chunk {
-					if err := writeBinary(dirBuf, order, uint16(0)); err != nil {
-						return nil, err
-					}
-					if err := writeBinary(dirBuf, order, int16(entry.ino)-int16(chunk[0].ino)); err != nil {
-						return nil, err
-					}
-					if err := writeBinary(dirBuf, order, entry.fileType); err != nil {
-						return nil, err
-					}
-					if err := writeBinary(dirBuf, order, uint16(len(entry.name)-1)); err != nil {
-						return nil, err
-					}
-					if err := writeBinary(dirBuf, order, []byte(entry.name)); err != nil {
-						return nil, err
-					}
-				}
-
-				entryIdx = chunkEnd
-			}
+		// Pre-allocate dirIndex entries for XDirType based on current inode positions
+		if err := w.simulateDirectoryIndices(inodePos); err != nil {
+			return nil, err
 		}
 
-		// Serialize inodes to determine block positions
-		currentBlock := 0
-		blockBuf := &bytes.Buffer{}
-		inodePos = make(map[uint32]inodePosition)
-
-		for _, ino := range w.inodes {
-			data, err := w.serializeInode(ino)
-			if err != nil {
-				return nil, err
-			}
-
-			if blockBuf.Len() > 0 && blockBuf.Len()+len(data) > maxMetadataBlockSize {
-				currentBlock++
-				blockBuf.Reset()
-			}
-
-			inodePos[ino.ino] = inodePosition{
-				blockNum: currentBlock,
-				offset:   uint32(blockBuf.Len()),
-			}
-
-			blockBuf.Write(data)
+		// Compute inode positions
+		var err error
+		inodePos, err = w.computeInodePositions()
+		if err != nil {
+			return nil, err
 		}
 
 		// Check if positions have stabilized
-		stable := true
-		for k, v := range inodePos {
-			if prev, ok := prevInodePos[k]; !ok || prev != v {
-				stable = false
-				break
-			}
-		}
-
-		if stable && iteration > 0 {
+		if iteration > 0 && w.inodePositionsEqual(prevInodePos, inodePos) {
 			break
 		}
 
@@ -708,93 +1069,9 @@ func (w *Writer) buildInodeTableToBuffer() ([]byte, error) {
 		}
 	}
 
-	// PASS 2: Build directory data using inode block numbers
-	globalDirOffset := uint32(0)
-	for _, inode := range w.inodes {
-		if inode.fileType != DirType && inode.fileType != XDirType {
-			continue
-		}
-
-		inode.dirOffset = globalDirOffset
-		dirBuf := &bytes.Buffer{}
-
-		if len(inode.entries) == 0 {
-			if err := writeBinary(dirBuf, order, uint32(0)); err != nil {
-				return nil, err
-			}
-			if err := writeBinary(dirBuf, order, uint32(0)); err != nil {
-				return nil, err
-			}
-			if err := writeBinary(dirBuf, order, inode.ino); err != nil {
-				return nil, err
-			}
-		} else {
-			if inode.fileType == XDirType {
-				inode.dirIndex = make([]DirIndexEntry, 0)
-			}
-
-			// Split chunks when entries cross metadata block boundaries OR at 256-entry intervals
-			entryIdx := 0
-			chunkNum := 0
-			for entryIdx < len(inode.entries) {
-				chunkStart := entryIdx
-				firstEntryBlock := inodePos[inode.entries[chunkStart].ino].blockNum
-
-				// Find end of chunk: stop at block boundary or 256 entries, whichever comes first
-				chunkEnd := chunkStart
-				for chunkEnd < len(inode.entries) &&
-					(chunkEnd-chunkStart) < indexInterval &&
-					inodePos[inode.entries[chunkEnd].ino].blockNum == firstEntryBlock {
-					chunkEnd++
-				}
-
-				chunk := inode.entries[chunkStart:chunkEnd]
-
-				if inode.fileType == XDirType {
-					inode.dirIndex = append(inode.dirIndex, DirIndexEntry{
-						Index: uint32(dirBuf.Len()),
-						Start: 0, // directory table block position (0 for first block)
-						Name:  chunk[0].name,
-					})
-				}
-
-				if err := writeBinary(dirBuf, order, uint32(len(chunk)-1)); err != nil {
-					return nil, err
-				}
-				if err := writeBinary(dirBuf, order, uint32(0)); err != nil {
-					return nil, err
-				}
-				if err := writeBinary(dirBuf, order, chunk[0].ino); err != nil {
-					return nil, err
-				}
-
-				for _, entry := range chunk {
-					if err := writeBinary(dirBuf, order, uint16(inodePos[entry.ino].offset)); err != nil {
-						return nil, err
-					}
-					if err := writeBinary(dirBuf, order, int16(entry.ino)-int16(chunk[0].ino)); err != nil {
-						return nil, err
-					}
-					if err := writeBinary(dirBuf, order, entry.fileType); err != nil {
-						return nil, err
-					}
-					if err := writeBinary(dirBuf, order, uint16(len(entry.name)-1)); err != nil {
-						return nil, err
-					}
-					if err := writeBinary(dirBuf, order, []byte(entry.name)); err != nil {
-						return nil, err
-					}
-				}
-
-				entryIdx = chunkEnd
-				chunkNum++
-			}
-
-		}
-
-		inode.dirData = dirBuf.Bytes()
-		inode.size = uint64(len(inode.dirData))
-		globalDirOffset += uint32(len(inode.dirData))
+	// PASS 2: Build initial directory data using inode block numbers (without block positions)
+	if err := w.buildDirectoryDataForAllInodes(inodePos, nil); err != nil {
+		return nil, err
 	}
 
 	// PASS 3+4: Iterate until blockPositions converges
@@ -804,219 +1081,49 @@ func (w *Writer) buildInodeTableToBuffer() ([]byte, error) {
 	maxDirIterations := 10
 
 	for dirIter := 0; dirIter < maxDirIterations; dirIter++ {
-		// PASS 2.5: Compute directory table offsets for DirIndexEntry.Start fields
-		// Must be done BEFORE Pass 3 so the Start values are used during serialization
+		// Compute directory table offsets for DirIndexEntry.Start fields
+		// (Must be done before computing block positions so Start values are correct)
 		if err := w.computeDirectoryTableOffsets(); err != nil {
 			return nil, err
 		}
 
-		// PASS 3: Calculate block positions
-		tempBuf := &bytes.Buffer{}
-		blockBuf := &bytes.Buffer{}
-		newBlockPositions := []uint32{0}
-
-		for _, ino := range w.inodes {
-			data, err := w.serializeInode(ino)
-			if err != nil {
-				return nil, err
-			}
-
-			if blockBuf.Len() > 0 && blockBuf.Len()+len(data) > maxMetadataBlockSize {
-				blockData := blockBuf.Bytes()
-				compressed, _ := w.comp.compress(blockData)
-
-				var blockSize int
-				if compressed != nil && len(compressed) < len(blockData) {
-					blockSize = 2 + len(compressed)
-				} else {
-					blockSize = 2 + len(blockData)
-				}
-
-				tempBuf.Write(make([]byte, blockSize))
-				newBlockPositions = append(newBlockPositions, uint32(tempBuf.Len()))
-				blockBuf.Reset()
-			}
-
-			blockBuf.Write(data)
+		// PASS 3: Calculate block positions after compression
+		newBlockPositions, err := w.computeBlockPositions()
+		if err != nil {
+			return nil, err
 		}
 
 		// Check if converged
-		converged := len(blockPositions) == len(newBlockPositions)
-		if converged {
-			for i := range blockPositions {
-				if blockPositions[i] != newBlockPositions[i] {
-					converged = false
-					break
-				}
-			}
+		if dirIter > 0 && w.blockPositionsEqual(blockPositions, newBlockPositions) {
+			blockPositions = newBlockPositions
+			break
 		}
 
 		blockPositions = newBlockPositions
-
-		if converged && dirIter > 0 {
-			break
-		}
 
 		if dirIter == maxDirIterations-1 {
 			return nil, fmt.Errorf("blockPositions failed to converge after %d iterations", maxDirIterations)
 		}
 
 		// PASS 4: Rebuild directory data with new block positions
-		globalDirOffset = 0
-		for _, inode := range w.inodes {
-			if inode.fileType != DirType && inode.fileType != XDirType {
-				continue
-			}
-
-			oldSize := inode.size
-			inode.dirOffset = globalDirOffset
-			dirBuf := &bytes.Buffer{}
-
-			if len(inode.entries) == 0 {
-				if err := writeBinary(dirBuf, order, uint32(0)); err != nil {
-					return nil, err
-				}
-				if err := writeBinary(dirBuf, order, uint32(0)); err != nil {
-					return nil, err
-				}
-				if err := writeBinary(dirBuf, order, inode.ino); err != nil {
-					return nil, err
-				}
-			} else {
-				if inode.fileType == XDirType {
-					inode.dirIndex = make([]DirIndexEntry, 0)
-				}
-
-				// Split chunks when entries cross metadata block boundaries OR at 256-entry intervals
-				entryIdx := 0
-				chunkNum := 0
-				for entryIdx < len(inode.entries) {
-					chunkStart := entryIdx
-					firstEntryBlock := inodePos[inode.entries[chunkStart].ino].blockNum
-
-					// Find end of chunk: stop at block boundary or 256 entries, whichever comes first
-					chunkEnd := chunkStart
-					for chunkEnd < len(inode.entries) &&
-						(chunkEnd-chunkStart) < indexInterval &&
-						inodePos[inode.entries[chunkEnd].ino].blockNum == firstEntryBlock {
-						chunkEnd++
-					}
-
-					chunk := inode.entries[chunkStart:chunkEnd]
-
-					if inode.fileType == XDirType {
-						inode.dirIndex = append(inode.dirIndex, DirIndexEntry{
-							Index: uint32(dirBuf.Len()),
-							Start: 0, // directory table block position (0 for first block)
-							Name:  chunk[0].name,
-						})
-					}
-
-					if err := writeBinary(dirBuf, order, uint32(len(chunk)-1)); err != nil {
-						return nil, err
-					}
-					if err := writeBinary(dirBuf, order, blockPositions[firstEntryBlock]); err != nil {
-						return nil, err
-					}
-					if err := writeBinary(dirBuf, order, chunk[0].ino); err != nil {
-						return nil, err
-					}
-
-					for _, entry := range chunk {
-						if err := writeBinary(dirBuf, order, uint16(inodePos[entry.ino].offset)); err != nil {
-							return nil, err
-						}
-						if err := writeBinary(dirBuf, order, int16(entry.ino)-int16(chunk[0].ino)); err != nil {
-							return nil, err
-						}
-						if err := writeBinary(dirBuf, order, entry.fileType); err != nil {
-							return nil, err
-						}
-						if err := writeBinary(dirBuf, order, uint16(len(entry.name)-1)); err != nil {
-							return nil, err
-						}
-						if err := writeBinary(dirBuf, order, []byte(entry.name)); err != nil {
-							return nil, err
-						}
-					}
-
-					entryIdx = chunkEnd
-					chunkNum++
-				}
-
-			}
-
-			inode.dirData = dirBuf.Bytes()
-			newSize := uint64(len(inode.dirData))
-			inode.size = newSize
-
-			if oldSize != newSize {
-				return nil, fmt.Errorf("directory size changed between Pass 2 (%d) and Pass 4 (%d) for inode %d",
-					oldSize, newSize, inode.ino)
-			}
-
-			globalDirOffset += uint32(len(inode.dirData))
+		if err := w.rebuildDirectoryDataWithBlockPositions(inodePos, blockPositions); err != nil {
+			return nil, err
 		}
 	}
 
 	// PASS 5: Serialize inodes with final directory data and write to output
-	result := &bytes.Buffer{}
-	blockBuf := &bytes.Buffer{}
-
-	for _, ino := range w.inodes {
-		data, err := w.serializeInode(ino)
-		if err != nil {
-			return nil, err
-		}
-
-		if blockBuf.Len() > 0 && blockBuf.Len()+len(data) > maxMetadataBlockSize {
-			// Write compressed metadata block
-			blockData := blockBuf.Bytes()
-			compressed, _ := w.comp.compress(blockData)
-
-			if compressed != nil && len(compressed) < len(blockData) {
-				header := make([]byte, 2)
-				binary.LittleEndian.PutUint16(header, uint16(len(compressed)))
-				result.Write(header)
-				result.Write(compressed)
-			} else {
-				header := make([]byte, 2)
-				binary.LittleEndian.PutUint16(header, uint16(len(blockData))|0x8000)
-				result.Write(header)
-				result.Write(blockData)
-			}
-
-			blockBuf.Reset()
-		}
-
-		blockBuf.Write(data)
+	result, err := w.serializeInodesToBuffer()
+	if err != nil {
+		return nil, err
 	}
 
-	// Write final block
-	if blockBuf.Len() > 0 {
-		blockData := blockBuf.Bytes()
-		compressed, _ := w.comp.compress(blockData)
-
-		if compressed != nil && len(compressed) < len(blockData) {
-			header := make([]byte, 2)
-			binary.LittleEndian.PutUint16(header, uint16(len(compressed)))
-			result.Write(header)
-			result.Write(compressed)
-		} else {
-			header := make([]byte, 2)
-			binary.LittleEndian.PutUint16(header, uint16(len(blockData))|0x8000)
-			result.Write(header)
-			result.Write(blockData)
-		}
-	}
-
-	// Set final inode positions based on block positions from Pass 3
+	// Set final inode positions based on block positions
 	for _, ino := range w.inodes {
 		ino.inodeBlockStart = blockPositions[inodePos[ino.ino].blockNum]
 		ino.inodeOffset = inodePos[ino.ino].offset
 	}
 
-	return result.Bytes(), nil
+	return result, nil
 }
 
 // computeDirectoryTableOffsets pre-compresses directory blocks and updates Start fields
@@ -1191,6 +1298,17 @@ func (w *Writer) prepareDirectories() error {
 // Finalize writes the complete SquashFS filesystem to the underlying writer.
 // After this method returns, the filesystem image is complete and the Writer
 // should not be used again.
+//
+// The finalization process follows this order:
+//  1. Write placeholder superblock (will be updated at the end)
+//  2. Build UID/GID table
+//  3. Write all file data blocks (compressed)
+//  4. Prepare directory structures (determine DirType vs XDirType)
+//  5. Build inode table with directory data (complex multi-pass process)
+//  6. Write directory table (pre-compressed blocks)
+//  7. Write inode table
+//  8. Write ID table
+//  9. Update superblock with final table offsets
 func (w *Writer) Finalize() error {
 	// Write placeholder superblock first (we'll update it at the end)
 	placeholder := make([]byte, SuperblockSize)
