@@ -1,5 +1,6 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/KarpelesLab/squashfs?style=flat-square)](https://goreportcard.com/report/github.com/KarpelesLab/squashfs)
 [![PkgGoDev](https://pkg.go.dev/badge/github.com/KarpelesLab/squashfs)](https://pkg.go.dev/github.com/KarpelesLab/squashfs)
+[![Coverage Status](https://coveralls.io/repos/github/KarpelesLab/squashfs/badge.svg?branch=master)](https://coveralls.io/github/KarpelesLab/squashfs?branch=master)
 [![Tags](https://img.shields.io/github/tag/KarpelesLab/squashfs.svg?style=flat-square)](https://github.com/KarpelesLab/squashfs/tags)
 
 # squashfs
