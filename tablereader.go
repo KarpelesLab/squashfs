@@ -28,11 +28,14 @@ func (sb *Superblock) newTableReader(base int64, start int) (*tableReader, error
 		if err == io.EOF {
 			err = io.ErrUnexpectedEOF
 		}
-		return nil, fmt.Errorf("failed to read initial block: %w", err)
+		return nil, fmt.Errorf("failed to read initial block at base=%d: %w", base, err)
 	}
 
 	if start != 0 {
 		// need to cut offset
+		if start > len(ir.buf) {
+			return nil, fmt.Errorf("start offset %d exceeds block size %d (base=%d)", start, len(ir.buf), base)
+		}
 		ir.buf = ir.buf[start:]
 	}
 
@@ -71,7 +74,7 @@ func (i *tableReader) readBlock() error {
 	buf := make([]byte, 2)
 	_, err := i.sb.fs.ReadAt(buf, i.offt)
 	if err != nil {
-		return err
+		return fmt.Errorf("readBlock header at offset %d: %w", i.offt, err)
 	}
 	lenN := i.sb.order.Uint16(buf)
 	nocompressFlag := false
@@ -87,7 +90,7 @@ func (i *tableReader) readBlock() error {
 	// read data
 	_, err = i.sb.fs.ReadAt(buf, i.offt+2)
 	if err != nil {
-		return err
+		return fmt.Errorf("readBlock data at offset %d, len %d: %w", i.offt+2, lenN, err)
 	}
 	i.offt += int64(lenN) + 2
 	if !nocompressFlag {
@@ -100,6 +103,7 @@ func (i *tableReader) readBlock() error {
 	}
 
 	i.buf = buf
+	//fmt.Printf("readBlock: offset=%d, compressedSize=%d, decompressedSize=%d\n", i.offt-int64(lenN)-2, lenN, len(buf))
 
 	return nil
 }

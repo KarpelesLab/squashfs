@@ -10,17 +10,7 @@ import (
 	"time"
 )
 
-const (
-	maxMetadataBlockSize = 8192
-	metadataHeaderSize   = 2
-	// For uncompressed blocks, the on-disk size is DataSize + HeaderSize
-	// Full blocks are 8192 + 2 = 8194 bytes
-	fullBlockPhysicalSize = maxMetadataBlockSize + metadataHeaderSize
-)
-
 // Writer creates SquashFS filesystem images.
-// This implementation uses uncompressed metadata to resolve circular dependencies
-// between Inodes and Directory Tables deterministically.
 type Writer struct {
 	w      io.Writer
 	wa     io.WriterAt
@@ -74,27 +64,24 @@ type writerInode struct {
 	entries []*writerInode
 	parent  *writerInode
 
-	// Calculated positions (Uncompressed offsets)
-	inodeUncompOffset uint32
-	dirUncompOffset   uint32
-	
-	// Directory Index (calculated during layout)
-	dirIndex []DirIndexEntry
+	// Physical inode position (set when inode is written to streaming meta)
+	inodeBlockIdx uint32
+	inodeOffset   uint16
 
-		// File data info
-		dataBlocks []uint32
-		startBlock uint64
-		
-		// Temporary Physical Fields (used during writing)
-		inodeRef       inodeRef
-		dirBlockStart  uint32
-		dirBlockOffset uint16
-	}
-	
-	// WriterOption configures a Writer
-	type WriterOption func(*Writer) error
-	
-	func WithBlockSize(size uint32) WriterOption {	return func(w *Writer) error {
+	// Directory position in dir meta (set when directory entries are written)
+	dirBlockIdx uint32
+	dirOffset   uint16
+
+	// File data info
+	dataBlocks []uint32
+	startBlock uint64
+}
+
+// WriterOption configures a Writer
+type WriterOption func(*Writer) error
+
+func WithBlockSize(size uint32) WriterOption {
+	return func(w *Writer) error {
 		w.blockSize = size
 		return nil
 	}
@@ -158,11 +145,17 @@ func (w *Writer) SetCompression(comp Compression) { w.comp = comp }
 func (w *Writer) SetSourceFS(srcFS fs.FS)         { w.srcFS = srcFS }
 
 func (w *Writer) Add(path string, d fs.DirEntry, err error) error {
-	if err != nil { return err }
-	if path == "." || path == "" { return nil }
+	if err != nil {
+		return err
+	}
+	if path == "." || path == "" {
+		return nil
+	}
 
 	info, err := d.Info()
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 
 	w.inodeCount++
 	inode := &writerInode{
@@ -197,7 +190,9 @@ func (w *Writer) Add(path string, d fs.DirEntry, err error) error {
 		inode.fileType = SymlinkType
 		if inode.srcFS != nil {
 			target, err := fs.ReadLink(inode.srcFS, path)
-			if err != nil { return fmt.Errorf("readlink: %w", err) }
+			if err != nil {
+				return fmt.Errorf("readlink: %w", err)
+			}
 			inode.symTarget = target
 			inode.size = uint64(len(target))
 		}
@@ -215,7 +210,9 @@ func (w *Writer) Add(path string, d fs.DirEntry, err error) error {
 
 	w.inodeMap[path] = inode
 	parent := w.inodeMap[getParentPath(path)]
-	if parent == nil { return fmt.Errorf("parent not found: %s", path) }
+	if parent == nil {
+		return fmt.Errorf("parent not found: %s", path)
+	}
 	inode.parent = parent
 	parent.entries = append(parent.entries, inode)
 
@@ -223,10 +220,14 @@ func (w *Writer) Add(path string, d fs.DirEntry, err error) error {
 }
 
 func getParentPath(path string) string {
-	if path == "" || path == "." { return "" }
+	if path == "" || path == "." {
+		return ""
+	}
 	for i := len(path) - 1; i >= 0; i-- {
 		if path[i] == '/' {
-			if i == 0 { return "." }
+			if i == 0 {
+				return "."
+			}
 			return path[:i]
 		}
 	}
@@ -249,313 +250,310 @@ func (w *Writer) write(data []byte) error {
 }
 
 // Finalize writes the filesystem.
+// The approach follows squashfs-tools-ng: inode table streams to output,
+// directory table is buffered. For each directory, we write its entries
+// BEFORE writing its inode, so we know the directory position.
 func (w *Writer) Finalize() error {
-	if err := w.buildIDTable(); err != nil { return err }
-	if err := w.writeFileData(); err != nil { return err } // Write file content
+	if err := w.buildIDTable(); err != nil {
+		return err
+	}
+	if err := w.writeFileData(); err != nil {
+		return err
+	}
 
-	// Layout Pass: Calculate uncompressed sizes and offsets
-	var dirUncompOffset uint32
-	var inodeUncompOffset uint32
-	
-	// Helper to traverse and calculate
-	var calcLayout func(*writerInode) error
-	calcLayout = func(node *writerInode) error {
-		// Process children first
+	// Sort all directory entries for deterministic output
+	var sortEntries func(*writerInode)
+	sortEntries = func(node *writerInode) {
 		if node.fileType == DirType || node.fileType == XDirType {
 			sortInodes(node.entries)
 			for _, child := range node.entries {
-				if err := calcLayout(child); err != nil { return err }
+				sortEntries(child)
 			}
-			
-			// Calculate Directory Data Size
-			dirSize, indexSize, err := w.calcDirSize(node, dirUncompOffset)
-			if err != nil { return err }
-			
-			node.dirUncompOffset = dirUncompOffset
-			node.size = uint64(dirSize)
-			
-			// Check for XDir
-			if len(node.entries) > 256 || dirSize > 16384 {
-				node.fileType = XDirType
-				if indexSize > 0 {
-					_, _, err := w.calcDirSize(node, dirUncompOffset) // Refresh
-					if err != nil { return err }
-				}
-			}
-			
-			dirUncompOffset += uint32(dirSize)
 		}
-		
-		return nil
 	}
-	
-	var calcInodeLayout func(*writerInode) error
-	calcInodeLayout = func(node *writerInode) error {
-		if node.fileType == DirType || node.fileType == XDirType {
-			for _, child := range node.entries {
-				if err := calcInodeLayout(child); err != nil { return err }
-			}
-		}
-		
-		size, err := w.serializedInodeSize(node)
-		if err != nil { return err }
-		
-		node.inodeUncompOffset = inodeUncompOffset
-		inodeUncompOffset += uint32(size)
-		return nil
+	sortEntries(w.rootInode)
+
+	// Pre-calculate directory sizes and detect XDirType
+	w.calcDirectorySizes(w.rootInode)
+
+	// Create metadata writers:
+	// - Inode table streams directly to output (physical positions known immediately)
+	// - Directory table is buffered in memory (written after inode table)
+	w.inodeTableStart = w.offset
+	inodeMeta := newStreamingMetaWriter(w, w.comp)
+	dirMeta := newBufferedMetaWriter(w.comp)
+
+	// Serialize all inodes in children-before-parents order.
+	// For directories: write directory entries first, then the directory inode.
+	if err := w.serializeTree(w.rootInode, inodeMeta, dirMeta); err != nil {
+		return err
 	}
 
-	// Iterate until layout stabilizes
-	for i := 0; i < 10; i++ {
-		// Reset offsets
-		dirUncompOffset = 0
-		inodeUncompOffset = 0
-		changed := false
-		
-		// Pass 1: Directories
-		err := calcLayout(w.rootInode)
-		if err != nil { return err }
-		
-		// Pass 2: Inodes
-		prevInodeTableSize := inodeUncompOffset
-		
-		err = calcInodeLayout(w.rootInode)
-		if err != nil { return err }
-		
-		if inodeUncompOffset != prevInodeTableSize {
-			changed = true
-		}
-		
-		if !changed && i > 0 {
-			break
-		}
+	// Flush remaining inode data
+	if err := inodeMeta.Flush(); err != nil {
+		return err
 	}
-	
-	// Phase 3: Write Tables (Uncompressed)
-	// We can now write streams using the calculated offsets to generate references.
-	
-	// Write Inode Table
-	w.inodeTableStart = w.offset
-	inodeBuf := &bytes.Buffer{}
-	if err := w.writeInodeTable(w.rootInode, inodeBuf); err != nil { return err }
-	if err := w.writeMetadataStream(inodeBuf.Bytes()); err != nil { return err }
-	
-	// Write Directory Table
+
+	// Now write the directory table
 	w.dirTableStart = w.offset
-	dirBuf := &bytes.Buffer{}
-	if err := w.writeDirTable(w.rootInode, dirBuf); err != nil { return err }
-	if err := w.writeMetadataStream(dirBuf.Bytes()); err != nil { return err }
-	
-	// Finish
-	if err := w.writeIDTable(); err != nil { return err }
-	
+	if _, err := dirMeta.WriteToOutput(w); err != nil {
+		return err
+	}
+
+	// Fix up the root inode reference using physical offsets
+	rootPhysOffset := inodeMeta.BlockOffset(w.rootInode.inodeBlockIdx)
+	w.sb.RootInode = inodeRef((rootPhysOffset << 16) | uint64(w.rootInode.inodeOffset))
+
+	// Write ID table
+	if err := w.writeIDTable(); err != nil {
+		return err
+	}
+
 	w.fragTableStart = 0xFFFFFFFFFFFFFFFF
 	w.exportTableStart = 0xFFFFFFFFFFFFFFFF
-	
-	// Calculate Root Inode Ref
-	// Physical Block = inodeUncompOffset / 8192 * 8194
-	// Offset = inodeUncompOffset % 8192
-	// But `inodeUncompOffset` is relative to start of table.
-	// We need `PhysicalOffset` relative to start of table.
-	// Map logic:
-	blockIdx := w.rootInode.inodeUncompOffset / maxMetadataBlockSize
-	blockOff := w.rootInode.inodeUncompOffset % maxMetadataBlockSize
-	physBlockOff := blockIdx * fullBlockPhysicalSize // This is the OFFSET of the block start
-	// Inode Ref = (BlockStartOffset << 16) | InnerOffset
-	w.sb.RootInode = inodeRef((uint64(physBlockOff) << 16) | uint64(blockOff))
-	
+
 	w.bytesUsed = w.offset
 	w.buildSuperblock()
-	
-	// Final commit
+
+	// Write superblock at position 0
 	sbData := w.sb.Bytes()
 	if w.wa != nil {
 		w.wa.WriteAt(sbData, 0)
 	} else {
-		// Buffered
 		data := w.buf.Bytes()
 		if len(data) >= SuperblockSize {
 			copy(data[0:SuperblockSize], sbData)
 		}
 		w.w.Write(data)
 	}
-	
+
 	return nil
 }
 
-// Helpers for Layout/Writing
-
-func (w *Writer) calcDirSize(node *writerInode, startOffset uint32) (int, int, error) {
-	// Simulate directory writing
-	size := 0
-	indexSize := 0
-	node.dirIndex = nil
-	
-	if len(node.entries) == 0 {
-		return 12, 0, nil // Header (4+4+4)
+// calcDirectorySizes recursively calculates directory sizes and detects XDirType.
+func (w *Writer) calcDirectorySizes(node *writerInode) {
+	if node.fileType != DirType && node.fileType != XDirType {
+		return
 	}
-	
-	currentIndex := 0
-	for currentIndex < len(node.entries) {
-		// Find run
-		baseRef := w.mapUncompToRef(node.entries[currentIndex].inodeUncompOffset)
-		baseBlock := baseRef.Index()
-		headerBaseIno := node.entries[currentIndex].ino
-		
-		endIndex := currentIndex
-		for endIndex < len(node.entries) {
-			ref := w.mapUncompToRef(node.entries[endIndex].inodeUncompOffset)
-			if ref.Index() != baseBlock { break }
-			if endIndex - currentIndex >= 256 { break }
-			diff := int32(node.entries[endIndex].ino) - int32(headerBaseIno)
-			if diff > 32767 || diff < -32768 { break }
-			endIndex++
+
+	// Process children first
+	for _, child := range node.entries {
+		w.calcDirectorySizes(child)
+	}
+
+	// Calculate directory data size
+	size := w.calcDirDataSize(node)
+	node.size = uint64(size)
+
+	// Check if XDir is needed
+	if len(node.entries) > 256 || size > 16384 {
+		node.fileType = XDirType
+	}
+}
+
+// calcDirDataSize calculates directory data size.
+// This is a pre-calculation; we don't know exact inode block positions yet,
+// so we use a conservative estimate (one header per ~200 entries or inode number break).
+func (w *Writer) calcDirDataSize(node *writerInode) int {
+	if len(node.entries) == 0 {
+		return 12 // Empty directory header
+	}
+
+	// Conservative estimate: assume entries might need separate headers
+	// due to inode number differences
+	size := 0
+	currentIdx := 0
+	for currentIdx < len(node.entries) {
+		baseChild := node.entries[currentIdx]
+
+		endIdx := currentIdx + 1
+		for endIdx < len(node.entries) && endIdx-currentIdx < 256 {
+			child := node.entries[endIdx]
+			diff := int32(child.ino) - int32(baseChild.ino)
+			if diff > 32767 || diff < -32768 {
+				break
+			}
+			endIdx++
 		}
-		
-		// Record Index
-		if len(node.entries) > 256 || size > 16384 {
-			// This is an XDir.
-			// Calculate physical block offset for the *current* directory position
-			// currentUncomp = startOffset + size
-			physBlock, _ := w.mapUncompToPhysical(startOffset + uint32(size))
-			node.dirIndex = append(node.dirIndex, DirIndexEntry{
-				Index: uint32(size),
-				Start: physBlock,
-				Name: node.entries[currentIndex].name,
-			})
-			indexSize += 12 + len(node.entries[currentIndex].name)
-		}
-		
-		// Header size: 12 bytes
+
+		// Header
 		size += 12
-		
 		// Entries
-		for i := currentIndex; i < endIndex; i++ {
-			// Entry size: 8 + nameLen
+		for i := currentIdx; i < endIdx; i++ {
 			size += 8 + len(node.entries[i].name)
 		}
-		
-		currentIndex = endIndex
+
+		currentIdx = endIdx
 	}
-	
-	return size, indexSize, nil
+
+	return size
 }
 
-func (w *Writer) mapUncompToPhysical(uncomp uint32) (uint32, uint16) {
-	blockIdx := uncomp / maxMetadataBlockSize
-	offset := uncomp % maxMetadataBlockSize
-	phys := blockIdx * fullBlockPhysicalSize
-	return phys, uint16(offset)
-}
-
-func (w *Writer) mapUncompToRef(uncomp uint32) inodeRef {
-	phys, off := w.mapUncompToPhysical(uncomp)
-	return inodeRef((uint64(phys) << 16) | uint64(off))
-}
-
-func (w *Writer) serializedInodeSize(node *writerInode) (int, error) {
-	// Populate temp fields for serialization size check
-	// We need these to be valid types, values don't affect size
-	node.inodeRef = 0
-	physDir, offDir := w.mapUncompToPhysical(node.dirUncompOffset)
-	node.dirBlockStart = physDir
-	node.dirBlockOffset = offDir
-	
-	b, err := w.serializeInode(node)
-	return len(b), err
-}
-
-func (w *Writer) writeMetadataStream(data []byte) error {
-	// Chunk and write with uncompressed headers
-	for len(data) > 0 {
-		n := len(data)
-		if n > maxMetadataBlockSize { n = maxMetadataBlockSize }
-		chunk := data[:n]
-		
-		header := make([]byte, 2)
-		binary.LittleEndian.PutUint16(header, uint16(n)|0x8000)
-		if err := w.write(header); err != nil { return err }
-		if err := w.write(chunk); err != nil { return err }
-		
-		data = data[n:]
-	}
-	return nil
-}
-
-func (w *Writer) writeInodeTable(node *writerInode, buf *bytes.Buffer) error {
+// serializeTree writes inodes in children-before-parents order.
+// For directories: write directory entries to dirMeta first, then write the inode.
+func (w *Writer) serializeTree(node *writerInode, inodeMeta *streamingMetaWriter, dirMeta *bufferedMetaWriter) error {
+	// Process children first (post-order traversal)
 	if node.fileType == DirType || node.fileType == XDirType {
 		for _, child := range node.entries {
-			if err := w.writeInodeTable(child, buf); err != nil { return err }
+			if err := w.serializeTree(child, inodeMeta, dirMeta); err != nil {
+				return err
+			}
 		}
 	}
-	
-	// Finalize fields
-	physDir, offDir := w.mapUncompToPhysical(node.dirUncompOffset)
-	node.dirBlockStart = physDir
-	node.dirBlockOffset = offDir
-	
-	data, err := w.serializeInode(node)
-	if err != nil { return err }
-	buf.Write(data)
-	return nil
-}
 
-func (w *Writer) writeDirTable(node *writerInode, buf *bytes.Buffer) error {
+	// For directories: write directory entries BEFORE the inode
 	if node.fileType == DirType || node.fileType == XDirType {
-		for _, child := range node.entries {
-			if err := w.writeDirTable(child, buf); err != nil { return err }
+		// Get physical position in directory table (compressed block offset + uncompressed offset)
+		physOffset, offset := dirMeta.Position()
+		node.dirBlockIdx = uint32(physOffset) // Physical byte offset into dir table
+		node.dirOffset = offset
+		actualSize, err := w.writeDirEntries(node, inodeMeta, dirMeta)
+		if err != nil {
+			return err
 		}
-		
-		// Write this dir's data
-		if err := w.realWriteDirData(node, buf); err != nil { return err }
+		// Update size to actual bytes written (overrides the pre-calculated estimate)
+		node.size = uint64(actualSize)
 	}
-	return nil
+
+	// Record inode position, then write the inode
+	node.inodeBlockIdx, node.inodeOffset = inodeMeta.Position()
+	return w.writeInode(node, inodeMeta)
 }
 
-func (w *Writer) realWriteDirData(node *writerInode, buf *bytes.Buffer) error {
+// writeDirEntries writes directory entries to the buffered directory meta.
+// Returns the number of bytes written.
+func (w *Writer) writeDirEntries(node *writerInode, inodeMeta *streamingMetaWriter, dirMeta *bufferedMetaWriter) (int, error) {
+	bytesWritten := 0
+
 	if len(node.entries) == 0 {
-		binary.Write(buf, binary.LittleEndian, uint32(0))
-		binary.Write(buf, binary.LittleEndian, uint32(0))
-		binary.Write(buf, binary.LittleEndian, node.ino)
-		return nil
+		// Empty directory - write a minimal header
+		buf := make([]byte, 12)
+		binary.LittleEndian.PutUint32(buf[0:], 0)        // count-1 = 0 means 1 entry? Actually 0 entries
+		binary.LittleEndian.PutUint32(buf[4:], 0)        // startBlock (unused for empty)
+		binary.LittleEndian.PutUint32(buf[8:], node.ino) // inodeNum
+		n, _ := dirMeta.Write(buf)
+		bytesWritten += n
+		return bytesWritten, nil
 	}
-	
-	currentIndex := 0
-	for currentIndex < len(node.entries) {
-		baseRef := w.mapUncompToRef(node.entries[currentIndex].inodeUncompOffset)
-		baseBlock := baseRef.Index()
-		headerBaseIno := node.entries[currentIndex].ino
-		
-		endIndex := currentIndex
-		for endIndex < len(node.entries) {
-			ref := w.mapUncompToRef(node.entries[endIndex].inodeUncompOffset)
-			if ref.Index() != baseBlock { break }
-			if endIndex - currentIndex >= 256 { break }
-			diff := int32(node.entries[endIndex].ino) - int32(headerBaseIno)
-			if diff > 32767 || diff < -32768 { break }
-			endIndex++
+
+	currentIdx := 0
+	for currentIdx < len(node.entries) {
+		// Find entries that share the same inode block and have compatible inode numbers
+		baseChild := node.entries[currentIdx]
+		baseBlockIdx := baseChild.inodeBlockIdx
+
+		endIdx := currentIdx + 1
+		for endIdx < len(node.entries) && endIdx-currentIdx < 256 {
+			child := node.entries[endIdx]
+			// Must be in the same inode block
+			if child.inodeBlockIdx != baseBlockIdx {
+				break
+			}
+			// Inode number difference must fit in int16
+			diff := int32(child.ino) - int32(baseChild.ino)
+			if diff > 32767 || diff < -32768 {
+				break
+			}
+			endIdx++
 		}
-		
-		binary.Write(buf, binary.LittleEndian, uint32(endIndex-currentIndex-1))
-		binary.Write(buf, binary.LittleEndian, uint32(baseBlock))
-		binary.Write(buf, binary.LittleEndian, int32(headerBaseIno))
-		
-		for i := currentIndex; i < endIndex; i++ {
+
+		// Get physical block offset for this group's inodes
+		startBlock := inodeMeta.BlockOffset(baseBlockIdx)
+
+		// Write header
+		headerBuf := make([]byte, 12)
+		binary.LittleEndian.PutUint32(headerBuf[0:], uint32(endIdx-currentIdx-1))
+		binary.LittleEndian.PutUint32(headerBuf[4:], uint32(startBlock))
+		binary.LittleEndian.PutUint32(headerBuf[8:], baseChild.ino)
+		n, _ := dirMeta.Write(headerBuf)
+		bytesWritten += n
+
+		// Write entries
+		for i := currentIdx; i < endIdx; i++ {
 			child := node.entries[i]
-			ref := w.mapUncompToRef(child.inodeUncompOffset)
-			binary.Write(buf, binary.LittleEndian, uint16(ref.Offset()))
-			binary.Write(buf, binary.LittleEndian, int16(int32(child.ino) - int32(headerBaseIno)))
-			binary.Write(buf, binary.LittleEndian, child.fileType)
-			binary.Write(buf, binary.LittleEndian, uint16(len(child.name)-1))
-			buf.Write([]byte(child.name))
+			entryBuf := &bytes.Buffer{}
+			binary.Write(entryBuf, binary.LittleEndian, child.inodeOffset)
+			binary.Write(entryBuf, binary.LittleEndian, int16(int32(child.ino)-int32(baseChild.ino)))
+			binary.Write(entryBuf, binary.LittleEndian, child.fileType)
+			binary.Write(entryBuf, binary.LittleEndian, uint16(len(child.name)-1))
+			entryBuf.Write([]byte(child.name))
+			n, _ := dirMeta.Write(entryBuf.Bytes())
+			bytesWritten += n
 		}
-		
-		currentIndex = endIndex
+
+		currentIdx = endIdx
 	}
-	return nil
+
+	return bytesWritten, nil
 }
 
-// ... helper funcs ...
+// writeInode writes a single inode to the streaming inode meta.
+func (w *Writer) writeInode(node *writerInode, inodeMeta *streamingMetaWriter) error {
+	buf := &bytes.Buffer{}
+	order := binary.LittleEndian
+
+	// Common header
+	binary.Write(buf, order, node.fileType)
+	binary.Write(buf, order, uint16(node.mode&0777))
+	binary.Write(buf, order, uint16(w.idTable[node.uid]))
+	binary.Write(buf, order, uint16(w.idTable[node.gid]))
+	binary.Write(buf, order, int32(node.modTime))
+	binary.Write(buf, order, node.ino)
+
+	switch node.fileType {
+	case DirType:
+		// For directories, we know the dir position because we wrote entries first
+		binary.Write(buf, order, node.dirBlockIdx) // Will be converted to physical later
+		binary.Write(buf, order, node.nlink)
+		binary.Write(buf, order, uint16(node.size))
+		binary.Write(buf, order, node.dirOffset)
+		parentIno := uint32(1)
+		if node.parent != nil {
+			parentIno = node.parent.ino
+		}
+		binary.Write(buf, order, parentIno)
+
+	case XDirType:
+		binary.Write(buf, order, node.nlink)
+		binary.Write(buf, order, uint32(node.size))
+		binary.Write(buf, order, node.dirBlockIdx) // Will be converted to physical later
+		parentIno := uint32(1)
+		if node.parent != nil {
+			parentIno = node.parent.ino
+		}
+		binary.Write(buf, order, parentIno)
+		binary.Write(buf, order, uint16(0))          // index count
+		binary.Write(buf, order, node.dirOffset)     // offset
+		binary.Write(buf, order, uint32(0xFFFFFFFF)) // xattr index
+
+	case FileType:
+		binary.Write(buf, order, uint32(node.startBlock))
+		binary.Write(buf, order, uint32(0xFFFFFFFF)) // fragment block
+		binary.Write(buf, order, uint32(0))          // fragment offset
+		binary.Write(buf, order, uint32(node.size))
+		for _, blockSize := range node.dataBlocks {
+			binary.Write(buf, order, blockSize)
+		}
+
+	case SymlinkType:
+		binary.Write(buf, order, node.nlink)
+		binary.Write(buf, order, uint32(len(node.symTarget)))
+		buf.Write([]byte(node.symTarget))
+
+	case CharDevType, BlockDevType:
+		binary.Write(buf, order, node.nlink)
+		binary.Write(buf, order, uint32(0))
+
+	case FifoType, SocketType:
+		binary.Write(buf, order, node.nlink)
+	}
+
+	_, err := inodeMeta.Write(buf.Bytes())
+	return err
+}
+
+// Helper functions
+
 func (w *Writer) buildIDTable() error {
 	seen := make(map[uint32]bool)
 	w.idList = make([]uint32, 0)
@@ -581,13 +579,15 @@ func (w *Writer) writeIDTable() error {
 	for i, id := range w.idList {
 		binary.LittleEndian.PutUint32(idData[i*4:], id)
 	}
-	// Metadata block for ID table
+
+	// Write ID data as metadata block
 	blockStart := w.offset
 	header := make([]byte, 2)
-	binary.LittleEndian.PutUint16(header, uint16(len(idData))|0x8000)
+	binary.LittleEndian.PutUint16(header, uint16(len(idData))|0x8000) // Uncompressed
 	w.write(header)
 	w.write(idData)
-	
+
+	// Write pointer to ID block
 	w.idTableStart = w.offset
 	pointer := make([]byte, 8)
 	binary.LittleEndian.PutUint64(pointer, blockStart)
@@ -596,28 +596,33 @@ func (w *Writer) writeIDTable() error {
 
 func (w *Writer) writeFileData() error {
 	var paths []string
-	for p := range w.inodeMap { paths = append(paths, p) }
+	for p := range w.inodeMap {
+		paths = append(paths, p)
+	}
 	sort.Strings(paths)
-	
+
 	for _, p := range paths {
 		inode := w.inodeMap[p]
-		if inode.fileType != FileType || inode.size == 0 || inode.srcFS == nil { continue }
-		
+		if inode.fileType != FileType || inode.size == 0 || inode.srcFS == nil {
+			continue
+		}
+
 		data, err := fs.ReadFile(inode.srcFS, inode.path)
-		if err != nil { return err }
-		
+		if err != nil {
+			return err
+		}
+
 		inode.startBlock = w.offset
-		// Just write uncompressed for simplicity/speed in this fix
-		// Or compress if we want
-		
-		// Let's compress file data, it's independent
 		blockSize := int(w.blockSize)
 		inode.dataBlocks = make([]uint32, 0)
+
 		for offset := 0; offset < len(data); offset += blockSize {
 			end := offset + blockSize
-			if end > len(data) { end = len(data) }
+			if end > len(data) {
+				end = len(data)
+			}
 			block := data[offset:end]
-			
+
 			compressed, _ := w.comp.compress(block)
 			if compressed != nil && len(compressed) < len(block) {
 				w.write(compressed)
@@ -629,72 +634,6 @@ func (w *Writer) writeFileData() error {
 		}
 	}
 	return nil
-}
-
-func (w *Writer) serializeInode(ino *writerInode) ([]byte, error) {
-	buf := &bytes.Buffer{}
-	order := binary.LittleEndian
-	
-	if err := writeBinary(buf, order, ino.fileType); err != nil { return nil, err }
-	if err := writeBinary(buf, order, uint16(ino.mode&0777)); err != nil { return nil, err }
-	
-	uidIdx := w.idTable[ino.uid]
-	gidIdx := w.idTable[ino.gid]
-	if err := writeBinary(buf, order, uint16(uidIdx)); err != nil { return nil, err }
-	if err := writeBinary(buf, order, uint16(gidIdx)); err != nil { return nil, err }
-	if err := writeBinary(buf, order, int32(ino.modTime)); err != nil { return nil, err }
-	if err := writeBinary(buf, order, ino.ino); err != nil { return nil, err }
-	
-	switch ino.fileType {
-	case DirType:
-		if err := writeBinary(buf, order, ino.dirBlockStart); err != nil { return nil, err }
-		if err := writeBinary(buf, order, ino.nlink); err != nil { return nil, err }
-		if err := writeBinary(buf, order, uint16(ino.size)); err != nil { return nil, err }
-		if err := writeBinary(buf, order, ino.dirBlockOffset); err != nil { return nil, err }
-		parentIno := uint32(1)
-		if ino.parent != nil { parentIno = ino.parent.ino }
-		if err := writeBinary(buf, order, parentIno); err != nil { return nil, err }
-	case XDirType:
-		if err := writeBinary(buf, order, ino.nlink); err != nil { return nil, err }
-		if err := writeBinary(buf, order, uint32(ino.size)); err != nil { return nil, err }
-		if err := writeBinary(buf, order, ino.dirBlockStart); err != nil { return nil, err }
-		parentIno := uint32(1)
-		if ino.parent != nil { parentIno = ino.parent.ino }
-		if err := writeBinary(buf, order, parentIno); err != nil { return nil, err }
-		if err := writeBinary(buf, order, uint16(len(ino.dirIndex))); err != nil { return nil, err }
-		if err := writeBinary(buf, order, ino.dirBlockOffset); err != nil { return nil, err }
-		if err := writeBinary(buf, order, uint32(0xFFFFFFFF)); err != nil { return nil, err }
-		for _, idx := range ino.dirIndex {
-			if err := writeBinary(buf, order, idx.Index); err != nil { return nil, err }
-			if err := writeBinary(buf, order, idx.Start); err != nil { return nil, err }
-			if err := writeBinary(buf, order, uint32(len(idx.Name)-1)); err != nil { return nil, err }
-			if err := writeBinary(buf, order, []byte(idx.Name)); err != nil { return nil, err }
-		}
-	case FileType:
-		if err := writeBinary(buf, order, uint32(ino.startBlock)); err != nil { return nil, err }
-		if err := writeBinary(buf, order, uint32(0xFFFFFFFF)); err != nil { return nil, err }
-		if err := writeBinary(buf, order, uint32(0)); err != nil { return nil, err }
-		if err := writeBinary(buf, order, uint32(ino.size)); err != nil { return nil, err }
-		for _, blockSize := range ino.dataBlocks {
-			if err := writeBinary(buf, order, blockSize); err != nil { return nil, err }
-		}
-	case SymlinkType:
-		if err := writeBinary(buf, order, ino.nlink); err != nil { return nil, err }
-		if err := writeBinary(buf, order, uint32(len(ino.symTarget))); err != nil { return nil, err }
-		if err := writeBinary(buf, order, []byte(ino.symTarget)); err != nil { return nil, err }
-	case CharDevType, BlockDevType:
-		if err := writeBinary(buf, order, ino.nlink); err != nil { return nil, err }
-		if err := writeBinary(buf, order, uint32(0)); err != nil { return nil, err }
-	case FifoType, SocketType:
-		if err := writeBinary(buf, order, ino.nlink); err != nil { return nil, err }
-	default:
-		return nil, fmt.Errorf("unsupported inode type %d", ino.fileType)
-	}
-	return buf.Bytes(), nil
-}
-
-func writeBinary(buf *bytes.Buffer, order binary.ByteOrder, data interface{}) error {
-	return binary.Write(buf, order, data)
 }
 
 func sortInodes(inodes []*writerInode) {
