@@ -318,13 +318,17 @@ func (w *Writer) Finalize() error {
 	// Write superblock at position 0
 	sbData := w.sb.Bytes()
 	if w.wa != nil {
-		w.wa.WriteAt(sbData, 0)
+		if _, err := w.wa.WriteAt(sbData, 0); err != nil {
+			return err
+		}
 	} else {
 		data := w.buf.Bytes()
 		if len(data) >= SuperblockSize {
 			copy(data[0:SuperblockSize], sbData)
 		}
-		w.w.Write(data)
+		if _, err := w.w.Write(data); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -472,11 +476,11 @@ func (w *Writer) writeDirEntries(node *writerInode, inodeMeta *streamingMetaWrit
 		for i := currentIdx; i < endIdx; i++ {
 			child := node.entries[i]
 			entryBuf := &bytes.Buffer{}
-			binary.Write(entryBuf, binary.LittleEndian, child.inodeOffset)
-			binary.Write(entryBuf, binary.LittleEndian, int16(int32(child.ino)-int32(baseChild.ino)))
-			binary.Write(entryBuf, binary.LittleEndian, child.fileType)
-			binary.Write(entryBuf, binary.LittleEndian, uint16(len(child.name)-1))
-			entryBuf.Write([]byte(child.name))
+			_ = binary.Write(entryBuf, binary.LittleEndian, child.inodeOffset)
+			_ = binary.Write(entryBuf, binary.LittleEndian, int16(int32(child.ino)-int32(baseChild.ino)))
+			_ = binary.Write(entryBuf, binary.LittleEndian, child.fileType)
+			_ = binary.Write(entryBuf, binary.LittleEndian, uint16(len(child.name)-1))
+			_, _ = entryBuf.Write([]byte(child.name))
 			n, _ := dirMeta.Write(entryBuf.Bytes())
 			bytesWritten += n
 		}
@@ -584,8 +588,12 @@ func (w *Writer) writeIDTable() error {
 	blockStart := w.offset
 	header := make([]byte, 2)
 	binary.LittleEndian.PutUint16(header, uint16(len(idData))|0x8000) // Uncompressed
-	w.write(header)
-	w.write(idData)
+	if err := w.write(header); err != nil {
+		return err
+	}
+	if err := w.write(idData); err != nil {
+		return err
+	}
 
 	// Write pointer to ID block
 	w.idTableStart = w.offset
@@ -625,10 +633,14 @@ func (w *Writer) writeFileData() error {
 
 			compressed, _ := w.comp.compress(block)
 			if compressed != nil && len(compressed) < len(block) {
-				w.write(compressed)
+				if err := w.write(compressed); err != nil {
+					return err
+				}
 				inode.dataBlocks = append(inode.dataBlocks, uint32(len(compressed)))
 			} else {
-				w.write(block)
+				if err := w.write(block); err != nil {
+					return err
+				}
 				inode.dataBlocks = append(inode.dataBlocks, uint32(len(block))|0x01000000)
 			}
 		}
