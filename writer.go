@@ -496,60 +496,60 @@ func (w *Writer) writeInode(node *writerInode, inodeMeta *streamingMetaWriter) e
 	buf := &bytes.Buffer{}
 	order := binary.LittleEndian
 
-	// Common header
-	binary.Write(buf, order, node.fileType)
-	binary.Write(buf, order, uint16(node.mode&0777))
-	binary.Write(buf, order, uint16(w.idTable[node.uid]))
-	binary.Write(buf, order, uint16(w.idTable[node.gid]))
-	binary.Write(buf, order, int32(node.modTime))
-	binary.Write(buf, order, node.ino)
+	// Common header (bytes.Buffer never fails, explicitly ignore errors)
+	_ = binary.Write(buf, order, node.fileType)
+	_ = binary.Write(buf, order, uint16(node.mode&0777))
+	_ = binary.Write(buf, order, uint16(w.idTable[node.uid]))
+	_ = binary.Write(buf, order, uint16(w.idTable[node.gid]))
+	_ = binary.Write(buf, order, int32(node.modTime))
+	_ = binary.Write(buf, order, node.ino)
 
 	switch node.fileType {
 	case DirType:
 		// For directories, we know the dir position because we wrote entries first
-		binary.Write(buf, order, node.dirBlockIdx) // Will be converted to physical later
-		binary.Write(buf, order, node.nlink)
-		binary.Write(buf, order, uint16(node.size))
-		binary.Write(buf, order, node.dirOffset)
+		_ = binary.Write(buf, order, node.dirBlockIdx) // Will be converted to physical later
+		_ = binary.Write(buf, order, node.nlink)
+		_ = binary.Write(buf, order, uint16(node.size))
+		_ = binary.Write(buf, order, node.dirOffset)
 		parentIno := uint32(1)
 		if node.parent != nil {
 			parentIno = node.parent.ino
 		}
-		binary.Write(buf, order, parentIno)
+		_ = binary.Write(buf, order, parentIno)
 
 	case XDirType:
-		binary.Write(buf, order, node.nlink)
-		binary.Write(buf, order, uint32(node.size))
-		binary.Write(buf, order, node.dirBlockIdx) // Will be converted to physical later
+		_ = binary.Write(buf, order, node.nlink)
+		_ = binary.Write(buf, order, uint32(node.size))
+		_ = binary.Write(buf, order, node.dirBlockIdx) // Will be converted to physical later
 		parentIno := uint32(1)
 		if node.parent != nil {
 			parentIno = node.parent.ino
 		}
-		binary.Write(buf, order, parentIno)
-		binary.Write(buf, order, uint16(0))          // index count
-		binary.Write(buf, order, node.dirOffset)     // offset
-		binary.Write(buf, order, uint32(0xFFFFFFFF)) // xattr index
+		_ = binary.Write(buf, order, parentIno)
+		_ = binary.Write(buf, order, uint16(0))          // index count
+		_ = binary.Write(buf, order, node.dirOffset)     // offset
+		_ = binary.Write(buf, order, uint32(0xFFFFFFFF)) // xattr index
 
 	case FileType:
-		binary.Write(buf, order, uint32(node.startBlock))
-		binary.Write(buf, order, uint32(0xFFFFFFFF)) // fragment block
-		binary.Write(buf, order, uint32(0))          // fragment offset
-		binary.Write(buf, order, uint32(node.size))
+		_ = binary.Write(buf, order, uint32(node.startBlock))
+		_ = binary.Write(buf, order, uint32(0xFFFFFFFF)) // fragment block
+		_ = binary.Write(buf, order, uint32(0))          // fragment offset
+		_ = binary.Write(buf, order, uint32(node.size))
 		for _, blockSize := range node.dataBlocks {
-			binary.Write(buf, order, blockSize)
+			_ = binary.Write(buf, order, blockSize)
 		}
 
 	case SymlinkType:
-		binary.Write(buf, order, node.nlink)
-		binary.Write(buf, order, uint32(len(node.symTarget)))
-		buf.Write([]byte(node.symTarget))
+		_ = binary.Write(buf, order, node.nlink)
+		_ = binary.Write(buf, order, uint32(len(node.symTarget)))
+		_, _ = buf.Write([]byte(node.symTarget))
 
 	case CharDevType, BlockDevType:
-		binary.Write(buf, order, node.nlink)
-		binary.Write(buf, order, uint32(0))
+		_ = binary.Write(buf, order, node.nlink)
+		_ = binary.Write(buf, order, uint32(0))
 
 	case FifoType, SocketType:
-		binary.Write(buf, order, node.nlink)
+		_ = binary.Write(buf, order, node.nlink)
 	}
 
 	_, err := inodeMeta.Write(buf.Bytes())
