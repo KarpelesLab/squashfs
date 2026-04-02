@@ -28,11 +28,8 @@ func TestWriterWithSubdirectories(t *testing.T) {
 		t.Fatalf("NewWriter failed: %s", err)
 	}
 
-	// Set source filesystem for reading file data
-	w.SetSourceFS(testFS)
-
 	// Add all files from testFS
-	err = fs.WalkDir(testFS, ".", w.Add)
+	err = w.AddFS(testFS)
 	if err != nil {
 		t.Fatalf("WalkDir failed: %s", err)
 	}
@@ -104,11 +101,8 @@ func TestWriterWithLargeDirectory(t *testing.T) {
 		t.Fatalf("NewWriter failed: %s", err)
 	}
 
-	// Set source filesystem
-	w.SetSourceFS(testFS)
-
 	// Add all files
-	err = fs.WalkDir(testFS, ".", w.Add)
+	err = w.AddFS(testFS)
 	if err != nil {
 		t.Fatalf("WalkDir failed: %s", err)
 	}
@@ -179,11 +173,8 @@ func TestWriterWithNestedDirectories(t *testing.T) {
 		t.Fatalf("NewWriter failed: %s", err)
 	}
 
-	// Set source filesystem
-	w.SetSourceFS(testFS)
-
 	// Add all files
-	err = fs.WalkDir(testFS, ".", w.Add)
+	err = w.AddFS(testFS)
 	if err != nil {
 		t.Fatalf("WalkDir failed: %s", err)
 	}
@@ -250,11 +241,8 @@ func TestWriterMixedContent(t *testing.T) {
 		t.Fatalf("NewWriter failed: %s", err)
 	}
 
-	// Set source filesystem
-	w.SetSourceFS(testFS)
-
 	// Add all files
-	err = fs.WalkDir(testFS, ".", w.Add)
+	err = w.AddFS(testFS)
 	if err != nil {
 		t.Fatalf("WalkDir failed: %s", err)
 	}

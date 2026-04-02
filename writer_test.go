@@ -2,7 +2,6 @@ package squashfs_test
 
 import (
 	"bytes"
-	"io/fs"
 	"os"
 	"testing"
 
@@ -19,7 +18,7 @@ func TestWriterBasic(t *testing.T) {
 	}
 
 	// Add files using WalkDir
-	err = fs.WalkDir(os.DirFS("testdata"), ".", w.Add)
+	err = w.AddFS(os.DirFS("testdata"))
 	if err != nil {
 		t.Fatalf("WalkDir failed: %s", err)
 	}

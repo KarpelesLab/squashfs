@@ -32,7 +32,6 @@ type Writer struct {
 	// Data tracking
 	idTable map[uint32]uint32
 	idList  []uint32
-	srcFS   fs.FS
 
 	// Table positions (filled during Finalize)
 	idTableStart     uint64
@@ -145,86 +144,86 @@ func NewWriter(w io.Writer, opts ...WriterOption) (*Writer, error) {
 }
 
 func (w *Writer) SetCompression(comp Compression) { w.comp = comp }
-func (w *Writer) SetSourceFS(srcFS fs.FS)         { w.srcFS = srcFS }
 
-func (w *Writer) Add(path string, d fs.DirEntry, err error) error {
-	if err != nil {
-		return err
-	}
-	if path == "." || path == "" {
-		return nil
-	}
-
-	info, err := d.Info()
-	if err != nil {
-		return err
-	}
-
-	w.inodeCount++
-	inode := &writerInode{
-		path:    path,
-		name:    info.Name(),
-		ino:     w.inodeCount,
-		mode:    info.Mode(),
-		size:    uint64(info.Size()),
-		modTime: info.ModTime().Unix(),
-		nlink:   1,
-		srcFS:   w.srcFS,
-	}
-
-	if sys := info.Sys(); sys != nil {
-		if statT, ok := sys.(interface {
-			Uid() uint32
-			Gid() uint32
-		}); ok {
-			inode.uid = statT.Uid()
-			inode.gid = statT.Gid()
+// AddFS walks the given filesystem and adds all entries to the writer.
+func (w *Writer) AddFS(srcFS fs.FS) error {
+	return fs.WalkDir(srcFS, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
-		if statT, ok := sys.(interface {
-			Rdev() uint32
-		}); ok {
-			inode.rdev = statT.Rdev()
+		if p == "." || p == "" {
+			return nil
 		}
-	}
 
-	switch {
-	case info.Mode().IsDir():
-		inode.fileType = DirType
-		inode.entries = make([]*writerInode, 0)
-		inode.nlink = 2
-	case info.Mode().IsRegular():
-		inode.fileType = FileType
-	case info.Mode()&fs.ModeSymlink != 0:
-		inode.fileType = SymlinkType
-		if inode.srcFS != nil {
-			target, err := fs.ReadLink(inode.srcFS, path)
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+
+		w.inodeCount++
+		inode := &writerInode{
+			path:    p,
+			name:    info.Name(),
+			ino:     w.inodeCount,
+			mode:    info.Mode(),
+			size:    uint64(info.Size()),
+			modTime: info.ModTime().Unix(),
+			nlink:   1,
+			srcFS:   srcFS,
+		}
+
+		if sys := info.Sys(); sys != nil {
+			if statT, ok := sys.(interface {
+				Uid() uint32
+				Gid() uint32
+			}); ok {
+				inode.uid = statT.Uid()
+				inode.gid = statT.Gid()
+			}
+			if statT, ok := sys.(interface {
+				Rdev() uint32
+			}); ok {
+				inode.rdev = statT.Rdev()
+			}
+		}
+
+		switch {
+		case info.Mode().IsDir():
+			inode.fileType = DirType
+			inode.entries = make([]*writerInode, 0)
+			inode.nlink = 2
+		case info.Mode().IsRegular():
+			inode.fileType = FileType
+		case info.Mode()&fs.ModeSymlink != 0:
+			inode.fileType = SymlinkType
+			target, err := fs.ReadLink(srcFS, p)
 			if err != nil {
 				return fmt.Errorf("readlink: %w", err)
 			}
 			inode.symTarget = target
 			inode.size = uint64(len(target))
+		case info.Mode()&fs.ModeCharDevice != 0:
+			inode.fileType = CharDevType
+		case info.Mode()&fs.ModeDevice != 0:
+			inode.fileType = BlockDevType
+		case info.Mode()&fs.ModeNamedPipe != 0:
+			inode.fileType = FifoType
+		case info.Mode()&fs.ModeSocket != 0:
+			inode.fileType = SocketType
+		default:
+			inode.fileType = FileType
 		}
-	case info.Mode()&fs.ModeCharDevice != 0:
-		inode.fileType = CharDevType
-	case info.Mode()&fs.ModeDevice != 0:
-		inode.fileType = BlockDevType
-	case info.Mode()&fs.ModeNamedPipe != 0:
-		inode.fileType = FifoType
-	case info.Mode()&fs.ModeSocket != 0:
-		inode.fileType = SocketType
-	default:
-		inode.fileType = FileType
-	}
 
-	w.inodeMap[path] = inode
-	parent := w.inodeMap[getParentPath(path)]
-	if parent == nil {
-		return fmt.Errorf("parent not found: %s", path)
-	}
-	inode.parent = parent
-	parent.entries = append(parent.entries, inode)
+		w.inodeMap[p] = inode
+		parent := w.inodeMap[getParentPath(p)]
+		if parent == nil {
+			return fmt.Errorf("parent not found: %s", p)
+		}
+		inode.parent = parent
+		parent.entries = append(parent.entries, inode)
 
-	return nil
+		return nil
+	})
 }
 
 func getParentPath(path string) string {

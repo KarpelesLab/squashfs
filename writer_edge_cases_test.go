@@ -37,8 +37,7 @@ func TestWriterLongFilenames(t *testing.T) {
 		t.Fatalf("NewWriter failed: %s", err)
 	}
 
-	w.SetSourceFS(testFS)
-	err = fs.WalkDir(testFS, ".", w.Add)
+	err = w.AddFS(testFS)
 	if err != nil {
 		t.Fatalf("WalkDir failed: %s", err)
 	}
@@ -110,8 +109,7 @@ func TestWriterVeryDeepNesting(t *testing.T) {
 		t.Fatalf("NewWriter failed: %s", err)
 	}
 
-	w.SetSourceFS(testFS)
-	err = fs.WalkDir(testFS, ".", w.Add)
+	err = w.AddFS(testFS)
 	if err != nil {
 		t.Fatalf("WalkDir failed: %s", err)
 	}
@@ -174,8 +172,7 @@ func TestWriterWideDirectoryTree(t *testing.T) {
 		t.Fatalf("NewWriter failed: %s", err)
 	}
 
-	w.SetSourceFS(testFS)
-	err = fs.WalkDir(testFS, ".", w.Add)
+	err = w.AddFS(testFS)
 	if err != nil {
 		t.Fatalf("WalkDir failed: %s", err)
 	}
@@ -260,8 +257,7 @@ func TestWriterSpecialCharactersInNames(t *testing.T) {
 		t.Fatalf("NewWriter failed: %s", err)
 	}
 
-	w.SetSourceFS(testFS)
-	err = fs.WalkDir(testFS, ".", w.Add)
+	err = w.AddFS(testFS)
 	if err != nil {
 		t.Fatalf("WalkDir failed: %s", err)
 	}
@@ -332,8 +328,7 @@ func TestWriterMixedWideAndDeep(t *testing.T) {
 		t.Fatalf("NewWriter failed: %s", err)
 	}
 
-	w.SetSourceFS(testFS)
-	err = fs.WalkDir(testFS, ".", w.Add)
+	err = w.AddFS(testFS)
 	if err != nil {
 		t.Fatalf("WalkDir failed: %s", err)
 	}
@@ -403,8 +398,7 @@ func TestWriterEmptyDirectoriesAtVariousLevels(t *testing.T) {
 		t.Fatalf("NewWriter failed: %s", err)
 	}
 
-	w.SetSourceFS(testFS)
-	err = fs.WalkDir(testFS, ".", w.Add)
+	err = w.AddFS(testFS)
 	if err != nil {
 		t.Fatalf("WalkDir failed: %s", err)
 	}
@@ -468,8 +462,7 @@ func TestWriterLargeNumberOfInodes(t *testing.T) {
 		t.Fatalf("NewWriter failed: %s", err)
 	}
 
-	w.SetSourceFS(testFS)
-	err = fs.WalkDir(testFS, ".", w.Add)
+	err = w.AddFS(testFS)
 	if err != nil {
 		t.Fatalf("WalkDir failed: %s", err)
 	}
@@ -543,8 +536,7 @@ func TestWriterVeryLongPath(t *testing.T) {
 		t.Fatalf("NewWriter failed: %s", err)
 	}
 
-	w.SetSourceFS(testFS)
-	err = fs.WalkDir(testFS, ".", w.Add)
+	err = w.AddFS(testFS)
 	if err != nil {
 		t.Fatalf("WalkDir failed: %s", err)
 	}

@@ -3,7 +3,6 @@ package squashfs
 import (
 	"bytes"
 	"fmt"
-	"io/fs"
 	"testing"
 	"testing/fstest"
 )
@@ -27,9 +26,7 @@ func TestDebugWriterEntries(t *testing.T) {
 		t.Fatalf("NewWriter failed: %s", err)
 	}
 
-	w.SetSourceFS(testFS)
-
-	err = fs.WalkDir(testFS, ".", w.Add)
+	err = w.AddFS(testFS)
 	if err != nil {
 		t.Fatalf("WalkDir failed: %s", err)
 	}
