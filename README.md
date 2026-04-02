@@ -5,9 +5,9 @@
 
 # squashfs
 
-This is a read-only implementation of squashfs initially meant to be use with [go-fuse](https://github.com/hanwen/go-fuse/).
+A pure Go implementation of SquashFS, supporting both reading and writing of squashfs filesystem images.
 
-Since then, golang added `io/fs` and fuse support was moved to a `fuse` tag, which means this module can be either used with go-fuse, or as a simple `io/fs`-compliant squashfs file reader.
+The read path implements Go's `io/fs` interface and optionally supports FUSE via the `fuse` build tag. The write path can create squashfs images from an `fs.FS` or programmatically, with support for all file types (regular files, directories, symlinks, devices, fifos, sockets) and compression formats.
 
 ## Tags
 
@@ -59,7 +59,7 @@ LZMA, LZO and LZ4 are also defined by squashfs and can be enabled similarly.
 
 # Example usage
 
-## Basic file access
+## Reading a squashfs image
 
 ```go
 sqfs, err := squashfs.Open("file.squashfs")
@@ -68,67 +68,71 @@ if err != nil {
 }
 defer sqfs.Close()
 
-// sqfs can be used as a regular fs.FS
+// sqfs implements fs.FS, fs.ReadDirFS, and fs.StatFS
 data, err := fs.ReadFile(sqfs, "dir/file.txt")
-if err != nil {
-    return err
-}
 
-// Or serve files over HTTP
+// Serve files over HTTP
 http.Handle("/", http.FileServer(sqfs))
-```
 
-## Reading directories
-
-```go
 // List directory contents
 entries, err := sqfs.ReadDir("some/directory")
-if err != nil {
-    return err
-}
 
-// Process directory entries
-for _, entry := range entries {
-    fmt.Printf("Name: %s, IsDir: %v\n", entry.Name(), entry.IsDir())
-    
-    // Get more info if needed
-    info, err := entry.Info()
-    if err != nil {
-        return err
-    }
-    fmt.Printf("Size: %d, Mode: %s\n", info.Size(), info.Mode())
-}
-```
-
-## Reading symlinks
-
-```go
 // Read a symlink target
 target, err := sqfs.Readlink("path/to/symlink")
+```
+
+## Creating a squashfs image from a directory
+
+```go
+out, err := os.Create("output.squashfs")
 if err != nil {
     return err
 }
-fmt.Printf("Symlink points to: %s\n", target)
+defer out.Close()
+
+w, err := squashfs.NewWriter(out)
+if err != nil {
+    return err
+}
+
+// Add all files from an existing directory
+if err := w.AddFS(os.DirFS("/path/to/source")); err != nil {
+    return err
+}
+
+return w.Finalize()
 ```
 
-## Custom compression support
+## Creating a squashfs image programmatically
 
 ```go
-// Register XZ support (requires "xz" build tag)
-import (
-    "github.com/KarpelesLab/squashfs"
-    "github.com/ulikunitz/xz"
+w, err := squashfs.NewWriter(out,
+    squashfs.WithCompression(squashfs.ZSTD),
+    squashfs.WithBlockSize(262144),
 )
-
-// Register XZ decompressor at init time
-func init() {
-    squashfs.RegisterCompHandler(squashfs.XZ, &squashfs.CompHandler{
-        Decompress: squashfs.MakeDecompressorErr(xz.NewReader),
-    })
+if err != nil {
+    return err
 }
-```
 
-For more examples, see the test files in the project.
+// Regular files
+w.AddFile("etc/config.json", configData, 0644)
+w.SetOwner("etc/config.json", 0, 0)
+
+// Directories
+w.AddDirectory("var/log", 0755)
+
+// Symlinks
+w.AddSymlink("usr/lib64", "lib")
+
+// Device nodes
+w.AddDevice("dev/null", fs.ModeCharDevice|0666, 1<<8|3)
+
+// Named pipes and sockets
+w.AddFifo("run/myapp.pipe", 0600)
+w.AddSocket("run/myapp.sock", 0600)
+
+return w.Finalize()
+```
 
 # File format
 
@@ -139,13 +143,16 @@ Some documentation is available online on SquashFS.
 
 # Features
 
-* Read-only implementation of squashfs compatible with Go's `io/fs` interface
-* Optional FUSE support with the `fuse` build tag
-* Support for GZip compression by default, with XZ and ZSTD available via build tags
-* Extensible compression support through the RegisterCompHandler API
-* Directory index support for fast access to files in large directories
-* Symlink support
-* CLI tool for exploring and extracting files from SquashFS archives
+* Read and write squashfs filesystem images in pure Go
+* Read path implements `fs.FS`, `fs.ReadDirFS`, and `fs.StatFS`
+* Write path supports all inode types: regular files, directories, symlinks, block/char devices, fifos, sockets
+* Full metadata support: permissions (including setuid/setgid/sticky), uid/gid, timestamps
+* GZip compression by default, with ZSTD and XZ available via build tags
+* Extensible compression through the `RegisterCompHandler` API
+* Optional FUSE support via the `fuse` build tag
+* Directory index support for fast lookups in large directories
+* Writer output validated against the reference `unsquashfs` implementation
+* CLI tool for exploring and extracting files from squashfs archives
 
 # CLI Tool
 
@@ -185,6 +192,11 @@ To install with additional compression support:
 go install -tags "xz zstd" github.com/KarpelesLab/squashfs/cmd/sqfs@latest
 ```
 
-# Performance
+# Limitations
 
-As of November 2024, directory indexes are now used for efficient file lookup in large directories, significantly improving performance for random file access.
+The writer does not currently support:
+
+* Fragment tables (tail-end packing of small files)
+* NFS export tables
+* File deduplication
+* Extended attributes (xattrs)
