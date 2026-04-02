@@ -728,16 +728,20 @@ func TestRoundTripFragments(t *testing.T) {
 func TestRoundTripFragmentMixedSizes(t *testing.T) {
 	blockSize := uint32(4096) // small block size for testing
 	data := buildImage(t, []squashfs.WriterOption{squashfs.WithBlockSize(blockSize)}, func(w *squashfs.Writer) {
-		// 1 byte — entirely in fragment
-		w.AddFile("tiny.txt", []byte("x"), 0644)
-		// blockSize-1 — entirely in fragment
-		w.AddFile("almost_block.txt", bytes.Repeat([]byte("a"), int(blockSize)-1), 0644)
-		// Exactly blockSize — full block, no fragment
-		w.AddFile("exact_block.txt", bytes.Repeat([]byte("b"), int(blockSize)), 0644)
-		// blockSize+1 — one full block + 1 byte fragment
-		w.AddFile("block_plus_one.txt", bytes.Repeat([]byte("c"), int(blockSize)+1), 0644)
-		// 2*blockSize+50 — two full blocks + 50 byte fragment
-		w.AddFile("two_blocks_plus.txt", bytes.Repeat([]byte("d"), int(blockSize)*2+50), 0644)
+		for _, tc := range []struct {
+			name string
+			data []byte
+		}{
+			{"tiny.txt", []byte("x")},
+			{"almost_block.txt", bytes.Repeat([]byte("a"), int(blockSize)-1)},
+			{"exact_block.txt", bytes.Repeat([]byte("b"), int(blockSize))},
+			{"block_plus_one.txt", bytes.Repeat([]byte("c"), int(blockSize)+1)},
+			{"two_blocks_plus.txt", bytes.Repeat([]byte("d"), int(blockSize)*2+50)},
+		} {
+			if err := w.AddFile(tc.name, tc.data, 0644); err != nil {
+				t.Fatal(err)
+			}
+		}
 	})
 
 	sb := openImage(t, data)
@@ -782,14 +786,22 @@ func TestCloneFile(t *testing.T) {
 
 	// Image with clone
 	cloneData := buildImage(t, nil, func(w *squashfs.Writer) {
-		w.AddFile("original.txt", content, 0644)
-		w.CloneInode("clone.txt", "original.txt")
+		if err := w.AddFile("original.txt", content, 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.CloneInode("clone.txt", "original.txt"); err != nil {
+			t.Fatal(err)
+		}
 	})
 
 	// Image without clone (two copies)
 	noCloneData := buildImage(t, nil, func(w *squashfs.Writer) {
-		w.AddFile("original.txt", content, 0644)
-		w.AddFile("clone.txt", content, 0644)
+		if err := w.AddFile("original.txt", content, 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.AddFile("clone.txt", content, 0644); err != nil {
+			t.Fatal(err)
+		}
 	})
 
 	t.Logf("With clone: %d bytes, without: %d bytes, saving: %d bytes",
@@ -818,12 +830,21 @@ func TestCloneFile(t *testing.T) {
 
 func TestXattrRoundTrip(t *testing.T) {
 	data := buildImage(t, nil, func(w *squashfs.Writer) {
-		w.AddFile("file.txt", []byte("hello"), 0644)
-		w.SetXattr("file.txt", "user.myattr", []byte("myvalue"))
-		w.SetXattr("file.txt", "user.another", []byte("val2"))
-
-		w.AddDirectory("dir", 0755)
-		w.SetXattr("dir", "user.dirattr", []byte("dirval"))
+		if err := w.AddFile("file.txt", []byte("hello"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.SetXattr("file.txt", "user.myattr", []byte("myvalue")); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.SetXattr("file.txt", "user.another", []byte("val2")); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.AddDirectory("dir", 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.SetXattr("dir", "user.dirattr", []byte("dirval")); err != nil {
+			t.Fatal(err)
+		}
 	})
 
 	sb := openImage(t, data)

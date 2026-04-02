@@ -1162,7 +1162,9 @@ func (w *Writer) writeXattrTable() error {
 		physOffset, offset := kvMeta.Position()
 		ref := (physOffset << 16) | uint64(offset)
 
-		kvMeta.Write(sets[i].kvData)
+		if _, err := kvMeta.Write(sets[i].kvData); err != nil {
+			return err
+		}
 
 		idEntries = append(idEntries, idEntry{
 			ref:   ref,

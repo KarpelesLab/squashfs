@@ -31,8 +31,8 @@ func xattrParseKey(key string) (uint16, string, error) {
 	return 0, "", fmt.Errorf("unknown xattr namespace: %s", key)
 }
 
-// xattrBuildKey reconstructs a full key from type and name.
-func xattrBuildKey(typ uint16, name string) string {
+// XattrBuildKey reconstructs a full key from type and name.
+func XattrBuildKey(typ uint16, name string) string {
 	if prefix, ok := xattrPrefixes[typ&0xFF]; ok {
 		return prefix + name
 	}
