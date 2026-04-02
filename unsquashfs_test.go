@@ -22,7 +22,7 @@ func writeToTempFile(t *testing.T, data []byte) string {
 		t.Fatalf("failed to create temp file: %s", err)
 	}
 	if _, err := f.Write(data); err != nil {
-		f.Close()
+		_ = f.Close()
 		t.Fatalf("failed to write temp file: %s", err)
 	}
 	if err := f.Close(); err != nil {

@@ -268,7 +268,7 @@ func TestRoundTripDevices(t *testing.T) {
 	// major=1, minor=3 → /dev/null (char device)
 	// major=8, minor=0 → /dev/sda (block device)
 	nullRdev := uint32(1<<8 | 3) // makedev(1,3)
-	sdaRdev := uint32(8<<8 | 0)  // makedev(8,0)
+	sdaRdev := uint32(8 << 8)    // makedev(8,0)
 
 	data := buildImage(t, nil, func(w *squashfs.Writer) {
 		if err := w.AddDevice("char_dev", fs.ModeCharDevice|0666, nullRdev); err != nil {
@@ -401,7 +401,7 @@ func TestRoundTripMixed(t *testing.T) {
 		if err := w.AddDevice("dev/null", fs.ModeCharDevice|0666, uint32(1<<8|3)); err != nil {
 			t.Fatal(err)
 		}
-		if err := w.AddDevice("dev/sda", fs.ModeDevice|0660, uint32(8<<8|0)); err != nil {
+		if err := w.AddDevice("dev/sda", fs.ModeDevice|0660, uint32(8<<8)); err != nil {
 			t.Fatal(err)
 		}
 
