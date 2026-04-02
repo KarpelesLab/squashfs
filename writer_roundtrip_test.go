@@ -2,6 +2,7 @@ package squashfs_test
 
 import (
 	"bytes"
+	"fmt"
 	"io/fs"
 	"strings"
 	"testing"
@@ -676,4 +677,177 @@ func TestUnsquashfsValidation(t *testing.T) {
 	// Full stat output
 	statOut := runUnsquashfs(t, data, "-stat")
 	t.Logf("unsquashfs -stat:\n%s", statOut)
+}
+
+func TestRoundTripFragments(t *testing.T) {
+	// Many small files — all should go into fragments
+	data := buildImage(t, nil, func(w *squashfs.Writer) {
+		for i := 0; i < 50; i++ {
+			name := fmt.Sprintf("file_%03d.txt", i)
+			content := fmt.Sprintf("content %d", i)
+			if err := w.AddFile(name, []byte(content), 0644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+
+	sb := openImage(t, data)
+
+	if sb.FragCount == 0 {
+		t.Error("expected FragCount > 0 for small files")
+	}
+	t.Logf("FragCount=%d, image size=%d bytes", sb.FragCount, len(data))
+
+	// Verify all files round-trip
+	for i := 0; i < 50; i++ {
+		name := fmt.Sprintf("file_%03d.txt", i)
+		content, err := fs.ReadFile(sb, name)
+		if err != nil {
+			t.Fatalf("ReadFile %s: %s", name, err)
+		}
+		expected := fmt.Sprintf("content %d", i)
+		if string(content) != expected {
+			t.Errorf("%s: got %q, want %q", name, string(content), expected)
+		}
+	}
+
+	if unsquashfsAvailable() {
+		out := unsquashfsListLong(t, data)
+		if !strings.Contains(out, "file_000.txt") {
+			t.Error("unsquashfs missing file_000.txt")
+		}
+		// Verify stat shows fragments
+		statOut := runUnsquashfs(t, data, "-stat")
+		t.Logf("unsquashfs -stat:\n%s", statOut)
+		if !strings.Contains(statOut, "Number of fragments") {
+			t.Error("missing fragment info in stat output")
+		}
+	}
+}
+
+func TestRoundTripFragmentMixedSizes(t *testing.T) {
+	blockSize := uint32(4096) // small block size for testing
+	data := buildImage(t, []squashfs.WriterOption{squashfs.WithBlockSize(blockSize)}, func(w *squashfs.Writer) {
+		// 1 byte — entirely in fragment
+		w.AddFile("tiny.txt", []byte("x"), 0644)
+		// blockSize-1 — entirely in fragment
+		w.AddFile("almost_block.txt", bytes.Repeat([]byte("a"), int(blockSize)-1), 0644)
+		// Exactly blockSize — full block, no fragment
+		w.AddFile("exact_block.txt", bytes.Repeat([]byte("b"), int(blockSize)), 0644)
+		// blockSize+1 — one full block + 1 byte fragment
+		w.AddFile("block_plus_one.txt", bytes.Repeat([]byte("c"), int(blockSize)+1), 0644)
+		// 2*blockSize+50 — two full blocks + 50 byte fragment
+		w.AddFile("two_blocks_plus.txt", bytes.Repeat([]byte("d"), int(blockSize)*2+50), 0644)
+	})
+
+	sb := openImage(t, data)
+	t.Logf("FragCount=%d, image size=%d", sb.FragCount, len(data))
+
+	// Verify all content
+	tests := []struct {
+		name string
+		size int
+		fill byte
+	}{
+		{"tiny.txt", 1, 'x'},
+		{"almost_block.txt", int(blockSize) - 1, 'a'},
+		{"exact_block.txt", int(blockSize), 'b'},
+		{"block_plus_one.txt", int(blockSize) + 1, 'c'},
+		{"two_blocks_plus.txt", int(blockSize)*2 + 50, 'd'},
+	}
+
+	for _, tt := range tests {
+		content, err := fs.ReadFile(sb, tt.name)
+		if err != nil {
+			t.Fatalf("ReadFile %s: %s", tt.name, err)
+		}
+		if len(content) != tt.size {
+			t.Errorf("%s: got %d bytes, want %d", tt.name, len(content), tt.size)
+		}
+		for i, b := range content {
+			if b != tt.fill {
+				t.Errorf("%s: byte %d = %c, want %c", tt.name, i, b, tt.fill)
+				break
+			}
+		}
+	}
+
+	if unsquashfsAvailable() {
+		unsquashfsExtract(t, data)
+	}
+}
+
+func TestCloneFile(t *testing.T) {
+	content := bytes.Repeat([]byte("dedup test data\n"), 1000)
+
+	// Image with clone
+	cloneData := buildImage(t, nil, func(w *squashfs.Writer) {
+		w.AddFile("original.txt", content, 0644)
+		w.CloneInode("clone.txt", "original.txt")
+	})
+
+	// Image without clone (two copies)
+	noCloneData := buildImage(t, nil, func(w *squashfs.Writer) {
+		w.AddFile("original.txt", content, 0644)
+		w.AddFile("clone.txt", content, 0644)
+	})
+
+	t.Logf("With clone: %d bytes, without: %d bytes, saving: %d bytes",
+		len(cloneData), len(noCloneData), len(noCloneData)-len(cloneData))
+
+	if len(cloneData) >= len(noCloneData) {
+		t.Error("clone should produce smaller image")
+	}
+
+	// Verify both files readable
+	sb := openImage(t, cloneData)
+	for _, name := range []string{"original.txt", "clone.txt"} {
+		got, err := fs.ReadFile(sb, name)
+		if err != nil {
+			t.Fatalf("ReadFile %s: %s", name, err)
+		}
+		if !bytes.Equal(got, content) {
+			t.Errorf("%s content mismatch", name)
+		}
+	}
+
+	if unsquashfsAvailable() {
+		unsquashfsExtract(t, cloneData)
+	}
+}
+
+func TestXattrRoundTrip(t *testing.T) {
+	data := buildImage(t, nil, func(w *squashfs.Writer) {
+		w.AddFile("file.txt", []byte("hello"), 0644)
+		w.SetXattr("file.txt", "user.myattr", []byte("myvalue"))
+		w.SetXattr("file.txt", "user.another", []byte("val2"))
+
+		w.AddDirectory("dir", 0755)
+		w.SetXattr("dir", "user.dirattr", []byte("dirval"))
+	})
+
+	sb := openImage(t, data)
+
+	// Verify files still readable
+	content, err := fs.ReadFile(sb, "file.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "hello" {
+		t.Errorf("content: got %q, want %q", string(content), "hello")
+	}
+
+	t.Logf("Image size: %d bytes, FragCount: %d", len(data), sb.FragCount)
+
+	if unsquashfsAvailable() {
+		// unsquashfs -lln shows xattrs
+		out := unsquashfsListLong(t, data)
+		t.Logf("unsquashfs -lln:\n%s", out)
+
+		statOut := runUnsquashfs(t, data, "-stat")
+		t.Logf("unsquashfs -stat:\n%s", statOut)
+		if strings.Contains(statOut, "Number of xattr ids 0") {
+			t.Error("expected xattr ids > 0")
+		}
+	}
 }

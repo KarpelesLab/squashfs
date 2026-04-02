@@ -194,9 +194,4 @@ go install -tags "xz zstd" github.com/KarpelesLab/squashfs/cmd/sqfs@latest
 
 # Limitations
 
-The writer does not currently support:
-
-* Fragment tables (tail-end packing of small files)
-* NFS export tables
-* File deduplication
-* Extended attributes (xattrs)
+* NFS export tables are not implemented

@@ -33,15 +33,30 @@ type Writer struct {
 	idTable map[uint32]uint32
 	idList  []uint32
 
+	// Fragment accumulation
+	fragEntries   []fragEntry
+	fragBuf       []byte
+	fragBufInodes []*writerInode
+
+	// Hard link detection (for AddFS dedup)
+	hardLinkMap map[devIno]*writerInode
+
 	// Table positions (filled during Finalize)
 	idTableStart     uint64
 	inodeTableStart  uint64
 	dirTableStart    uint64
 	fragTableStart   uint64
+	xattrTableStart  uint64
 	exportTableStart uint64
 	bytesUsed        uint64
 
 	sb Superblock
+}
+
+// fragEntry describes a completed fragment block on disk.
+type fragEntry struct {
+	start uint64 // byte offset where the fragment block was written
+	size  uint32 // compressed size, bit 24 set if uncompressed
 }
 
 // writerInode represents an inode in the tree
@@ -77,6 +92,15 @@ type writerInode struct {
 	// File data info
 	dataBlocks []uint32
 	startBlock uint64
+	fragBlock  uint32 // fragment table index (0xFFFFFFFF = no fragment)
+	fragOfft   uint32 // offset within decompressed fragment block
+
+	// Deduplication
+	cloneOf *writerInode // if set, shares file data with this inode
+
+	// Extended attributes
+	xattrs   map[string][]byte
+	xattrIdx uint32 // index into xattr ID table (0xFFFFFFFF = none)
 }
 
 // WriterOption configures a Writer
@@ -105,12 +129,13 @@ func WithModTime(t time.Time) WriterOption {
 
 func NewWriter(w io.Writer, opts ...WriterOption) (*Writer, error) {
 	writer := &Writer{
-		w:         w,
-		blockSize: 131072, // 128KB default
-		comp:      GZip,
-		modTime:   int32(time.Now().Unix()),
-		idTable:   make(map[uint32]uint32),
-		inodeMap:  make(map[string]*writerInode),
+		w:           w,
+		blockSize:   131072, // 128KB default
+		comp:        GZip,
+		modTime:     int32(time.Now().Unix()),
+		idTable:     make(map[uint32]uint32),
+		inodeMap:    make(map[string]*writerInode),
+		hardLinkMap: make(map[devIno]*writerInode),
 	}
 
 	if wa, ok := w.(io.WriterAt); ok {
@@ -123,12 +148,14 @@ func NewWriter(w io.Writer, opts ...WriterOption) (*Writer, error) {
 	}
 
 	writer.rootInode = &writerInode{
-		ino:      1,
-		mode:     fs.ModeDir | 0755,
-		modTime:  time.Now().Unix(),
-		nlink:    2,
-		fileType: DirType,
-		entries:  make([]*writerInode, 0),
+		ino:       1,
+		mode:      fs.ModeDir | 0755,
+		modTime:   time.Now().Unix(),
+		nlink:     2,
+		fileType:  DirType,
+		entries:   make([]*writerInode, 0),
+		fragBlock: 0xFFFFFFFF,
+		xattrIdx:  0xFFFFFFFF,
 	}
 	writer.inodeCount = 1
 	writer.inodeMap["."] = writer.rootInode
@@ -162,14 +189,16 @@ func (w *Writer) AddFS(srcFS fs.FS) error {
 
 		w.inodeCount++
 		inode := &writerInode{
-			path:    p,
-			name:    info.Name(),
-			ino:     w.inodeCount,
-			mode:    info.Mode(),
-			size:    uint64(info.Size()),
-			modTime: info.ModTime().Unix(),
-			nlink:   1,
-			srcFS:   srcFS,
+			path:      p,
+			name:      info.Name(),
+			ino:       w.inodeCount,
+			mode:      info.Mode(),
+			size:      uint64(info.Size()),
+			modTime:   info.ModTime().Unix(),
+			nlink:     1,
+			srcFS:     srcFS,
+			fragBlock: 0xFFFFFFFF,
+			xattrIdx:  0xFFFFFFFF,
 		}
 
 		if sys := info.Sys(); sys != nil {
@@ -185,6 +214,24 @@ func (w *Writer) AddFS(srcFS fs.FS) error {
 			}); ok {
 				inode.rdev = statT.Rdev()
 			}
+		}
+
+		// Hard link detection for regular files
+		if info.Mode().IsRegular() {
+			if di, ok := getDevIno(info.Sys()); ok {
+				if existing, found := w.hardLinkMap[di]; found {
+					inode.cloneOf = existing
+					inode.nlink = existing.nlink + 1
+					existing.nlink = inode.nlink
+				} else {
+					w.hardLinkMap[di] = inode
+				}
+			}
+		}
+
+		// Read xattrs from source filesystem
+		if xattrs := readXattrs(srcFS, p); len(xattrs) > 0 {
+			inode.xattrs = xattrs
 		}
 
 		switch {
@@ -272,6 +319,8 @@ func (w *Writer) addInode(p string, inode *writerInode) error {
 	inode.path = p
 	inode.name = path.Base(p)
 	inode.parent = parent
+	inode.fragBlock = 0xFFFFFFFF
+	inode.xattrIdx = 0xFFFFFFFF
 	if inode.modTime == 0 {
 		inode.modTime = time.Now().Unix()
 	}
@@ -379,6 +428,78 @@ func (w *Writer) SetModTime(p string, t time.Time) error {
 	return nil
 }
 
+// CloneInode creates a new entry at newPath that references the same underlying
+// inode as existingPath. This works for any inode type — files share data blocks,
+// directories share directory entries, symlinks share targets, etc.
+// The caller is responsible for not creating cycles (e.g. cloning a directory into itself).
+func (w *Writer) CloneInode(newPath, existingPath string) error {
+	existing := w.inodeMap[existingPath]
+	if existing == nil {
+		return fmt.Errorf("path not found: %s", existingPath)
+	}
+
+	inode := &writerInode{
+		mode:      existing.mode,
+		size:      existing.size,
+		fileType:  existing.fileType,
+		symTarget: existing.symTarget,
+		rdev:      existing.rdev,
+		nlink:     1,
+		cloneOf:   existing,
+	}
+	if existing.fileType.IsDir() {
+		inode.entries = existing.entries
+	}
+	if err := w.addInode(newPath, inode); err != nil {
+		return err
+	}
+
+	existing.nlink++
+	inode.nlink = existing.nlink
+	return nil
+}
+
+// SetXattr sets an extended attribute on an existing inode.
+func (w *Writer) SetXattr(p, name string, value []byte) error {
+	inode := w.inodeMap[p]
+	if inode == nil {
+		return fmt.Errorf("path not found: %s", p)
+	}
+	if inode.xattrs == nil {
+		inode.xattrs = make(map[string][]byte)
+	}
+	inode.xattrs[name] = value
+	return nil
+}
+
+// promoteExtendedTypes upgrades inodes to extended types when needed.
+func (w *Writer) promoteExtendedTypes() {
+	for _, inode := range w.inodeMap {
+		needsExtended := len(inode.xattrs) > 0 || inode.xattrIdx != 0xFFFFFFFF
+		needsExtended = needsExtended || (inode.fileType == FileType && inode.nlink > 1)
+
+		if !needsExtended {
+			continue
+		}
+
+		switch inode.fileType {
+		case FileType:
+			inode.fileType = XFileType
+		case SymlinkType:
+			inode.fileType = XSymlinkType
+		case BlockDevType:
+			inode.fileType = XBlockDevType
+		case CharDevType:
+			inode.fileType = XCharDevType
+		case FifoType:
+			inode.fileType = XFifoType
+		case SocketType:
+			inode.fileType = XSocketType
+			// DirType → XDirType is handled by calcDirectorySizes
+		}
+	}
+}
+
 func (w *Writer) Write(p []byte) (n int, err error) {
 	if w.wa != nil {
 		n, err = w.wa.WriteAt(p, int64(w.offset))
@@ -406,10 +527,16 @@ func (w *Writer) Finalize() error {
 		return err
 	}
 
+	// Assign xattr indices (needed before type promotion and inode serialization)
+	w.assignXattrIndices()
+
+	// Promote inodes to extended types where needed (xattrs, nlink>1)
+	w.promoteExtendedTypes()
+
 	// Sort all directory entries for deterministic output
 	var sortEntries func(*writerInode)
 	sortEntries = func(node *writerInode) {
-		if node.fileType == DirType || node.fileType == XDirType {
+		if node.fileType.Basic() == DirType {
 			sortInodes(node.entries)
 			for _, child := range node.entries {
 				sortEntries(child)
@@ -421,41 +548,39 @@ func (w *Writer) Finalize() error {
 	// Pre-calculate directory sizes and detect XDirType
 	w.calcDirectorySizes(w.rootInode)
 
-	// Create metadata writers:
-	// - Inode table streams directly to output (physical positions known immediately)
-	// - Directory table is buffered in memory (written after inode table)
+	// Write tables in squashfs order: inode → directory → fragment → ID
 	w.inodeTableStart = w.offset
 	inodeMeta := newStreamingMetaWriter(w, w.comp)
 	dirMeta := newBufferedMetaWriter(w.comp)
 
-	// Serialize all inodes in children-before-parents order.
-	// For directories: write directory entries first, then the directory inode.
 	if err := w.serializeTree(w.rootInode, inodeMeta, dirMeta); err != nil {
 		return err
 	}
-
-	// Flush remaining inode data
 	if err := inodeMeta.Flush(); err != nil {
 		return err
 	}
 
-	// Now write the directory table
 	w.dirTableStart = w.offset
 	if _, err := dirMeta.WriteToOutput(w); err != nil {
 		return err
 	}
 
-	// Fix up the root inode reference using physical offsets
 	rootPhysOffset := inodeMeta.BlockOffset(w.rootInode.inodeBlockIdx)
 	w.sb.RootInode = inodeRef((rootPhysOffset << 16) | uint64(w.rootInode.inodeOffset))
 
-	// Write ID table
+	if err := w.writeFragmentTable(); err != nil {
+		return err
+	}
+
+	w.exportTableStart = 0xFFFFFFFFFFFFFFFF
+
 	if err := w.writeIDTable(); err != nil {
 		return err
 	}
 
-	w.fragTableStart = 0xFFFFFFFFFFFFFFFF
-	w.exportTableStart = 0xFFFFFFFFFFFFFFFF
+	if err := w.writeXattrTable(); err != nil {
+		return err
+	}
 
 	w.bytesUsed = w.offset
 	w.buildSuperblock()
@@ -481,7 +606,7 @@ func (w *Writer) Finalize() error {
 
 // calcDirectorySizes recursively calculates directory sizes and detects XDirType.
 func (w *Writer) calcDirectorySizes(node *writerInode) {
-	if node.fileType != DirType && node.fileType != XDirType {
+	if !node.fileType.IsDir() {
 		return
 	}
 
@@ -542,7 +667,7 @@ func (w *Writer) calcDirDataSize(node *writerInode) int {
 // For directories: write directory entries to dirMeta first, then write the inode.
 func (w *Writer) serializeTree(node *writerInode, inodeMeta *streamingMetaWriter, dirMeta *bufferedMetaWriter) error {
 	// Process children first (post-order traversal)
-	if node.fileType == DirType || node.fileType == XDirType {
+	if node.fileType.IsDir() {
 		for _, child := range node.entries {
 			if err := w.serializeTree(child, inodeMeta, dirMeta); err != nil {
 				return err
@@ -619,7 +744,7 @@ func (w *Writer) writeDirEntries(node *writerInode, inodeMeta *streamingMetaWrit
 			entryBuf := &bytes.Buffer{}
 			_ = binary.Write(entryBuf, binary.LittleEndian, child.inodeOffset)
 			_ = binary.Write(entryBuf, binary.LittleEndian, int16(int32(child.ino)-int32(baseChild.ino)))
-			_ = binary.Write(entryBuf, binary.LittleEndian, child.fileType)
+			_ = binary.Write(entryBuf, binary.LittleEndian, child.fileType.Basic())
 			_ = binary.Write(entryBuf, binary.LittleEndian, uint16(len(child.name)-1))
 			_, _ = entryBuf.Write([]byte(child.name))
 			n, _ := dirMeta.Write(entryBuf.Bytes())
@@ -667,15 +792,27 @@ func (w *Writer) writeInode(node *writerInode, inodeMeta *streamingMetaWriter) e
 			parentIno = node.parent.ino
 		}
 		_ = binary.Write(buf, order, parentIno)
-		_ = binary.Write(buf, order, uint16(0))          // index count
-		_ = binary.Write(buf, order, node.dirOffset)     // offset
-		_ = binary.Write(buf, order, uint32(0xFFFFFFFF)) // xattr index
+		_ = binary.Write(buf, order, uint16(0))      // index count
+		_ = binary.Write(buf, order, node.dirOffset) // offset
+		_ = binary.Write(buf, order, node.xattrIdx)
 
 	case FileType:
 		_ = binary.Write(buf, order, uint32(node.startBlock))
-		_ = binary.Write(buf, order, uint32(0xFFFFFFFF)) // fragment block
-		_ = binary.Write(buf, order, uint32(0))          // fragment offset
+		_ = binary.Write(buf, order, node.fragBlock)
+		_ = binary.Write(buf, order, node.fragOfft)
 		_ = binary.Write(buf, order, uint32(node.size))
+		for _, blockSize := range node.dataBlocks {
+			_ = binary.Write(buf, order, blockSize)
+		}
+
+	case XFileType:
+		_ = binary.Write(buf, order, node.startBlock) // uint64
+		_ = binary.Write(buf, order, node.size)       // uint64
+		_ = binary.Write(buf, order, uint64(0))       // sparse
+		_ = binary.Write(buf, order, node.nlink)      // uint32
+		_ = binary.Write(buf, order, node.fragBlock)  // uint32
+		_ = binary.Write(buf, order, node.fragOfft)   // uint32
+		_ = binary.Write(buf, order, node.xattrIdx)   // uint32
 		for _, blockSize := range node.dataBlocks {
 			_ = binary.Write(buf, order, blockSize)
 		}
@@ -685,12 +822,27 @@ func (w *Writer) writeInode(node *writerInode, inodeMeta *streamingMetaWriter) e
 		_ = binary.Write(buf, order, uint32(len(node.symTarget)))
 		_, _ = buf.Write([]byte(node.symTarget))
 
+	case XSymlinkType:
+		_ = binary.Write(buf, order, node.nlink)
+		_ = binary.Write(buf, order, uint32(len(node.symTarget)))
+		_, _ = buf.Write([]byte(node.symTarget))
+		_ = binary.Write(buf, order, node.xattrIdx)
+
 	case CharDevType, BlockDevType:
 		_ = binary.Write(buf, order, node.nlink)
 		_ = binary.Write(buf, order, node.rdev)
 
+	case XCharDevType, XBlockDevType:
+		_ = binary.Write(buf, order, node.nlink)
+		_ = binary.Write(buf, order, node.rdev)
+		_ = binary.Write(buf, order, node.xattrIdx)
+
 	case FifoType, SocketType:
 		_ = binary.Write(buf, order, node.nlink)
+
+	case XFifoType, XSocketType:
+		_ = binary.Write(buf, order, node.nlink)
+		_ = binary.Write(buf, order, node.xattrIdx)
 	}
 
 	_, err := inodeMeta.Write(buf.Bytes())
@@ -750,9 +902,11 @@ func (w *Writer) writeFileData() error {
 	}
 	sort.Strings(paths)
 
+	blockSize := int(w.blockSize)
+
 	for _, p := range paths {
 		inode := w.inodeMap[p]
-		if inode.fileType != FileType || inode.size == 0 {
+		if inode.fileType != FileType || inode.size == 0 || inode.cloneOf != nil {
 			continue
 		}
 
@@ -770,16 +924,14 @@ func (w *Writer) writeFileData() error {
 		}
 
 		inode.startBlock = w.offset
-		blockSize := int(w.blockSize)
 		inode.dataBlocks = make([]uint32, 0)
 
-		for offset := 0; offset < len(data); offset += blockSize {
-			end := offset + blockSize
-			if end > len(data) {
-				end = len(data)
-			}
-			block := data[offset:end]
+		fullBlocks := len(data) / blockSize
+		tailSize := len(data) % blockSize
 
+		// Write full blocks
+		for i := 0; i < fullBlocks; i++ {
+			block := data[i*blockSize : (i+1)*blockSize]
 			compressed, _ := w.comp.compress(block)
 			if compressed != nil && len(compressed) < len(block) {
 				if err := w.write(compressed); err != nil {
@@ -793,7 +945,304 @@ func (w *Writer) writeFileData() error {
 				inode.dataBlocks = append(inode.dataBlocks, uint32(len(block))|0x01000000)
 			}
 		}
+
+		// Handle tail as fragment
+		if tailSize > 0 {
+			tail := data[fullBlocks*blockSize:]
+
+			// Flush if adding this tail would exceed blockSize
+			if len(w.fragBuf)+len(tail) > blockSize {
+				if err := w.flushFragmentBlock(); err != nil {
+					return err
+				}
+			}
+
+			inode.fragOfft = uint32(len(w.fragBuf))
+			w.fragBuf = append(w.fragBuf, tail...)
+			w.fragBufInodes = append(w.fragBufInodes, inode)
+		}
 	}
+
+	// Flush remaining fragment data
+	if len(w.fragBuf) > 0 {
+		if err := w.flushFragmentBlock(); err != nil {
+			return err
+		}
+	}
+
+	// Copy data references for cloned (hard-linked) inodes
+	for _, p := range paths {
+		inode := w.inodeMap[p]
+		if inode.cloneOf != nil {
+			inode.startBlock = inode.cloneOf.startBlock
+			inode.dataBlocks = inode.cloneOf.dataBlocks
+			inode.fragBlock = inode.cloneOf.fragBlock
+			inode.fragOfft = inode.cloneOf.fragOfft
+		}
+	}
+
+	return nil
+}
+
+// flushFragmentBlock compresses and writes the accumulated fragment buffer.
+func (w *Writer) flushFragmentBlock() error {
+	if len(w.fragBuf) == 0 {
+		return nil
+	}
+
+	fragIdx := uint32(len(w.fragEntries))
+	start := w.offset
+
+	compressed, _ := w.comp.compress(w.fragBuf)
+	var size uint32
+	if compressed != nil && len(compressed) < len(w.fragBuf) {
+		if err := w.write(compressed); err != nil {
+			return err
+		}
+		size = uint32(len(compressed))
+	} else {
+		if err := w.write(w.fragBuf); err != nil {
+			return err
+		}
+		size = uint32(len(w.fragBuf)) | 0x01000000
+	}
+
+	w.fragEntries = append(w.fragEntries, fragEntry{start: start, size: size})
+
+	// Assign fragment index to all pending inodes
+	for _, inode := range w.fragBufInodes {
+		inode.fragBlock = fragIdx
+	}
+
+	w.fragBuf = w.fragBuf[:0]
+	w.fragBufInodes = w.fragBufInodes[:0]
+	return nil
+}
+
+// writeFragmentTable writes the fragment table and its indirect pointer table.
+func (w *Writer) writeFragmentTable() error {
+	if len(w.fragEntries) == 0 {
+		w.fragTableStart = 0xFFFFFFFFFFFFFFFF
+		return nil
+	}
+
+	// Serialize fragment entries (16 bytes each) into metadata blocks
+	entryData := make([]byte, len(w.fragEntries)*16)
+	for i, e := range w.fragEntries {
+		binary.LittleEndian.PutUint64(entryData[i*16:], e.start)
+		binary.LittleEndian.PutUint32(entryData[i*16+8:], e.size)
+		binary.LittleEndian.PutUint32(entryData[i*16+12:], 0) // unused
+	}
+
+	// Write as compressed metadata blocks (8KB each), track block offsets
+	var blockOffsets []uint64
+	for pos := 0; pos < len(entryData); pos += metaBlockSize {
+		end := pos + metaBlockSize
+		if end > len(entryData) {
+			end = len(entryData)
+		}
+		block := entryData[pos:end]
+
+		blockOffsets = append(blockOffsets, w.offset)
+		compressed, _ := w.comp.compress(block)
+		header := make([]byte, 2)
+		if compressed != nil && len(compressed) < len(block) {
+			binary.LittleEndian.PutUint16(header, uint16(len(compressed)))
+			if err := w.write(header); err != nil {
+				return err
+			}
+			if err := w.write(compressed); err != nil {
+				return err
+			}
+		} else {
+			binary.LittleEndian.PutUint16(header, uint16(len(block))|0x8000)
+			if err := w.write(header); err != nil {
+				return err
+			}
+			if err := w.write(block); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Write indirect pointer table
+	w.fragTableStart = w.offset
+	for _, off := range blockOffsets {
+		pointer := make([]byte, 8)
+		binary.LittleEndian.PutUint64(pointer, off)
+		if err := w.write(pointer); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// xattrSet holds serialized xattr data for one inode.
+type xattrSet struct {
+	inode   *writerInode
+	kvData  []byte
+	kvCount uint32
+	kvSize  uint32
+}
+
+// assignXattrIndices pre-assigns xattr indices to inodes with xattrs.
+// Must be called before promoteExtendedTypes and inode serialization.
+func (w *Writer) assignXattrIndices() {
+	idx := uint32(0)
+	for _, inode := range w.inodeMap {
+		if len(inode.xattrs) > 0 {
+			inode.xattrIdx = idx
+			idx++
+		}
+	}
+}
+
+// collectXattrSets builds the serialized xattr data for all inodes.
+func (w *Writer) collectXattrSets() []xattrSet {
+	var sets []xattrSet
+	for _, inode := range w.inodeMap {
+		if len(inode.xattrs) == 0 {
+			continue
+		}
+
+		var kvBuf bytes.Buffer
+		count := uint32(0)
+		var keys []string
+		for k := range inode.xattrs {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+
+		for _, key := range keys {
+			val := inode.xattrs[key]
+			typ, name, err := xattrParseKey(key)
+			if err != nil {
+				continue
+			}
+			_ = binary.Write(&kvBuf, binary.LittleEndian, typ)
+			_ = binary.Write(&kvBuf, binary.LittleEndian, uint16(len(name)))
+			kvBuf.Write([]byte(name))
+			_ = binary.Write(&kvBuf, binary.LittleEndian, uint32(len(val)))
+			kvBuf.Write(val)
+			count++
+		}
+
+		if count > 0 {
+			sets = append(sets, xattrSet{
+				inode:   inode,
+				kvData:  kvBuf.Bytes(),
+				kvCount: count,
+				kvSize:  uint32(kvBuf.Len()),
+			})
+		}
+	}
+	return sets
+}
+
+// writeXattrTable serializes extended attributes into the squashfs xattr table format.
+func (w *Writer) writeXattrTable() error {
+	sets := w.collectXattrSets()
+
+	if len(sets) == 0 {
+		w.xattrTableStart = 0xFFFFFFFFFFFFFFFF
+		return nil
+	}
+
+	// Write k-v data as compressed metadata blocks
+	kvMeta := newBufferedMetaWriter(w.comp)
+	type idEntry struct {
+		ref   uint64
+		count uint32
+		size  uint32
+	}
+	var idEntries []idEntry
+
+	for i := range sets {
+		physOffset, offset := kvMeta.Position()
+		ref := (physOffset << 16) | uint64(offset)
+
+		kvMeta.Write(sets[i].kvData)
+
+		idEntries = append(idEntries, idEntry{
+			ref:   ref,
+			count: sets[i].kvCount,
+			size:  sets[i].kvSize,
+		})
+	}
+
+	// Write k-v metadata blocks to output
+	kvStart := w.offset
+	if _, err := kvMeta.WriteToOutput(w); err != nil {
+		return err
+	}
+
+	// Write ID entries as compressed metadata blocks
+	idData := make([]byte, len(idEntries)*16)
+	for i, e := range idEntries {
+		binary.LittleEndian.PutUint64(idData[i*16:], e.ref)
+		binary.LittleEndian.PutUint32(idData[i*16+8:], e.count)
+		binary.LittleEndian.PutUint32(idData[i*16+12:], e.size)
+	}
+
+	var idBlockOffsets []uint64
+	for pos := 0; pos < len(idData); pos += metaBlockSize {
+		end := pos + metaBlockSize
+		if end > len(idData) {
+			end = len(idData)
+		}
+		block := idData[pos:end]
+
+		idBlockOffsets = append(idBlockOffsets, w.offset)
+		compressed, _ := w.comp.compress(block)
+		header := make([]byte, 2)
+		if compressed != nil && len(compressed) < len(block) {
+			binary.LittleEndian.PutUint16(header, uint16(len(compressed)))
+			if err := w.write(header); err != nil {
+				return err
+			}
+			if err := w.write(compressed); err != nil {
+				return err
+			}
+		} else {
+			binary.LittleEndian.PutUint16(header, uint16(len(block))|0x8000)
+			if err := w.write(header); err != nil {
+				return err
+			}
+			if err := w.write(block); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Write xattr table header
+	w.xattrTableStart = w.offset
+	// u64 kv_start
+	buf := make([]byte, 8)
+	binary.LittleEndian.PutUint64(buf, kvStart)
+	if err := w.write(buf); err != nil {
+		return err
+	}
+	// u32 count
+	buf = make([]byte, 4)
+	binary.LittleEndian.PutUint32(buf, uint32(len(idEntries)))
+	if err := w.write(buf); err != nil {
+		return err
+	}
+	// u32 unused
+	buf = make([]byte, 4)
+	if err := w.write(buf); err != nil {
+		return err
+	}
+	// u64[] id block locations
+	for _, off := range idBlockOffsets {
+		buf := make([]byte, 8)
+		binary.LittleEndian.PutUint64(buf, off)
+		if err := w.write(buf); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -815,7 +1264,7 @@ func (w *Writer) buildSuperblock() {
 	w.sb.InodeCnt = w.inodeCount
 	w.sb.ModTime = w.modTime
 	w.sb.BlockSize = w.blockSize
-	w.sb.FragCount = 0
+	w.sb.FragCount = uint32(len(w.fragEntries))
 	w.sb.Comp = w.comp
 	w.sb.BlockLog = blockLog
 	w.sb.Flags = w.flags
@@ -824,7 +1273,7 @@ func (w *Writer) buildSuperblock() {
 	w.sb.VMinor = 0
 	w.sb.BytesUsed = w.bytesUsed
 	w.sb.IdTableStart = w.idTableStart
-	w.sb.XattrIdTableStart = 0xFFFFFFFFFFFFFFFF
+	w.sb.XattrIdTableStart = w.xattrTableStart
 	w.sb.InodeTableStart = w.inodeTableStart
 	w.sb.DirTableStart = w.dirTableStart
 	w.sb.FragTableStart = w.fragTableStart
