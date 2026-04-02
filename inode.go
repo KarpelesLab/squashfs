@@ -36,6 +36,8 @@ type Inode struct {
 	XattrIdx   uint32 // extended attribute index if present
 	Sparse     uint64 // sparse file information
 
+	Rdev uint32 // device number (for block/char device inodes)
+
 	// fragment information for file data that doesn't fill a complete block
 	FragBlock uint32 // fragment block index
 	FragOfft  uint32 // offset within fragment block
@@ -373,6 +375,42 @@ func (sb *Superblock) GetInodeRef(inor inodeRef) (*Inode, error) {
 		ino.SymTarget = buf
 
 		//log.Printf("squashfs: read symlink to %s", ino.SymTarget)
+	case 4, 5: // Basic block device, basic char device
+		err = binary.Read(r, sb.order, &ino.NLink)
+		if err != nil {
+			return nil, err
+		}
+		err = binary.Read(r, sb.order, &ino.Rdev)
+		if err != nil {
+			return nil, err
+		}
+	case 11, 12: // Extended block device, extended char device
+		err = binary.Read(r, sb.order, &ino.NLink)
+		if err != nil {
+			return nil, err
+		}
+		err = binary.Read(r, sb.order, &ino.Rdev)
+		if err != nil {
+			return nil, err
+		}
+		err = binary.Read(r, sb.order, &ino.XattrIdx)
+		if err != nil {
+			return nil, err
+		}
+	case 6, 7: // Basic fifo, basic socket
+		err = binary.Read(r, sb.order, &ino.NLink)
+		if err != nil {
+			return nil, err
+		}
+	case 13, 14: // Extended fifo, extended socket
+		err = binary.Read(r, sb.order, &ino.NLink)
+		if err != nil {
+			return nil, err
+		}
+		err = binary.Read(r, sb.order, &ino.XattrIdx)
+		if err != nil {
+			return nil, err
+		}
 	default:
 		log.Printf("squashfs: unsupported inode type %d", ino.Type)
 		return ino, nil

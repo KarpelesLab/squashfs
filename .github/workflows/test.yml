@@ -30,12 +30,13 @@ jobs:
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
-        sudo apt-get install -y libfuse-dev
+        sudo apt-get install -y libfuse-dev squashfs-tools
 
     - name: Install dependencies (macOS)
       if: runner.os == 'macOS'
       run: |
         brew install --cask macfuse
+        brew install squashfs
 
     - name: Build
       run: go build -v ./...
@@ -75,7 +76,7 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libfuse-dev
+        sudo apt-get install -y libfuse-dev squashfs-tools
 
     - name: golangci-lint
       uses: golangci/golangci-lint-action@v9
@@ -101,7 +102,7 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libfuse-dev
+        sudo apt-get install -y libfuse-dev squashfs-tools
 
     - name: Run tests with coverage
       run: go test -v -tags "fuse xz zstd" -covermode=count -coverprofile=coverage.out ./...

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"path"
 	"sort"
 	"time"
 )
@@ -58,6 +59,8 @@ type writerInode struct {
 	nlink     uint32
 	fileType  Type
 	symTarget string
+	rdev      uint32
+	fileData  []byte
 
 	srcFS fs.FS
 
@@ -177,6 +180,11 @@ func (w *Writer) Add(path string, d fs.DirEntry, err error) error {
 			inode.uid = statT.Uid()
 			inode.gid = statT.Gid()
 		}
+		if statT, ok := sys.(interface {
+			Rdev() uint32
+		}); ok {
+			inode.rdev = statT.Rdev()
+		}
 	}
 
 	switch {
@@ -232,6 +240,144 @@ func getParentPath(path string) string {
 		}
 	}
 	return "."
+}
+
+// addInode adds a pre-built inode to the writer's tree, creating intermediate
+// directories as needed.
+func (w *Writer) addInode(p string, inode *writerInode) error {
+	if p == "" || p == "." {
+		return fmt.Errorf("cannot add root inode")
+	}
+	if _, exists := w.inodeMap[p]; exists {
+		return fmt.Errorf("path already exists: %s", p)
+	}
+
+	// Ensure parent directories exist
+	parentPath := getParentPath(p)
+	if parentPath != "" && parentPath != "." {
+		if _, exists := w.inodeMap[parentPath]; !exists {
+			// Auto-create intermediate directory
+			if err := w.AddDirectory(parentPath, 0755); err != nil {
+				return err
+			}
+		}
+	}
+
+	parent := w.inodeMap[parentPath]
+	if parent == nil {
+		return fmt.Errorf("parent not found: %s", parentPath)
+	}
+
+	w.inodeCount++
+	inode.ino = w.inodeCount
+	inode.path = p
+	inode.name = path.Base(p)
+	inode.parent = parent
+	if inode.modTime == 0 {
+		inode.modTime = time.Now().Unix()
+	}
+
+	w.inodeMap[p] = inode
+	parent.entries = append(parent.entries, inode)
+	return nil
+}
+
+// AddFile adds a regular file with the given content and permissions.
+// The perm may include fs.ModeSetuid, fs.ModeSetgid, and fs.ModeSticky.
+func (w *Writer) AddFile(p string, data []byte, perm fs.FileMode) error {
+	inode := &writerInode{
+		mode:     perm & (fs.ModePerm | fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky),
+		size:     uint64(len(data)),
+		fileType: FileType,
+		nlink:    1,
+		fileData: data,
+	}
+	return w.addInode(p, inode)
+}
+
+// AddDirectory adds an empty directory with the given permissions.
+func (w *Writer) AddDirectory(p string, perm fs.FileMode) error {
+	inode := &writerInode{
+		mode:     fs.ModeDir | perm&fs.ModePerm,
+		fileType: DirType,
+		nlink:    2,
+		entries:  make([]*writerInode, 0),
+	}
+	return w.addInode(p, inode)
+}
+
+// AddSymlink adds a symbolic link pointing to target.
+func (w *Writer) AddSymlink(p, target string) error {
+	inode := &writerInode{
+		mode:      fs.ModeSymlink | 0777,
+		size:      uint64(len(target)),
+		fileType:  SymlinkType,
+		nlink:     1,
+		symTarget: target,
+	}
+	return w.addInode(p, inode)
+}
+
+// AddDevice adds a block or character device node. The mode must include
+// fs.ModeDevice (block) or fs.ModeCharDevice (character) to select the type.
+func (w *Writer) AddDevice(p string, mode fs.FileMode, rdev uint32) error {
+	var ft Type
+	switch {
+	case mode&fs.ModeCharDevice != 0:
+		ft = CharDevType
+	case mode&fs.ModeDevice != 0:
+		ft = BlockDevType
+	default:
+		return fmt.Errorf("mode must include ModeDevice or ModeCharDevice")
+	}
+	inode := &writerInode{
+		mode:     mode,
+		fileType: ft,
+		nlink:    1,
+		rdev:     rdev,
+	}
+	return w.addInode(p, inode)
+}
+
+// AddFifo adds a named pipe (FIFO) with the given permissions.
+func (w *Writer) AddFifo(p string, perm fs.FileMode) error {
+	inode := &writerInode{
+		mode:     fs.ModeNamedPipe | perm&fs.ModePerm,
+		fileType: FifoType,
+		nlink:    1,
+	}
+	return w.addInode(p, inode)
+}
+
+// AddSocket adds a Unix domain socket with the given permissions.
+func (w *Writer) AddSocket(p string, perm fs.FileMode) error {
+	inode := &writerInode{
+		mode:     fs.ModeSocket | perm&fs.ModePerm,
+		fileType: SocketType,
+		nlink:    1,
+	}
+	return w.addInode(p, inode)
+}
+
+// SetOwner sets the uid and gid on an existing inode.
+func (w *Writer) SetOwner(p string, uid, gid uint32) error {
+	inode := w.inodeMap[p]
+	if inode == nil {
+		return fmt.Errorf("path not found: %s", p)
+	}
+	inode.uid = uid
+	inode.gid = gid
+	return nil
+}
+
+// SetModTime sets the modification time on an existing inode.
+func (w *Writer) SetModTime(p string, t time.Time) error {
+	inode := w.inodeMap[p]
+	if inode == nil {
+		return fmt.Errorf("path not found: %s", p)
+	}
+	inode.modTime = t.Unix()
+	return nil
 }
 
 func (w *Writer) Write(p []byte) (n int, err error) {
@@ -345,11 +491,11 @@ func (w *Writer) calcDirectorySizes(node *writerInode) {
 		w.calcDirectorySizes(child)
 	}
 
-	// Calculate directory data size
-	size := w.calcDirDataSize(node)
+	// Calculate directory data size (stored as actual + 3 per squashfs convention)
+	size := w.calcDirDataSize(node) + 3
 	node.size = uint64(size)
 
-	// Check if XDir is needed
+	// Check if XDir is needed (compare against stored size which includes +3)
 	if len(node.entries) > 256 || size > 16384 {
 		node.fileType = XDirType
 	}
@@ -415,8 +561,9 @@ func (w *Writer) serializeTree(node *writerInode, inodeMeta *streamingMetaWriter
 		if err != nil {
 			return err
 		}
-		// Update size to actual bytes written (overrides the pre-calculated estimate)
-		node.size = uint64(actualSize)
+		// The squashfs spec stores directory size as actual_data + 3
+		// (the reader stops when exactly 3 bytes remain).
+		node.size = uint64(actualSize) + 3
 	}
 
 	// Record inode position, then write the inode
@@ -430,14 +577,9 @@ func (w *Writer) writeDirEntries(node *writerInode, inodeMeta *streamingMetaWrit
 	bytesWritten := 0
 
 	if len(node.entries) == 0 {
-		// Empty directory - write a minimal header
-		buf := make([]byte, 12)
-		binary.LittleEndian.PutUint32(buf[0:], 0)        // count-1 = 0 means 1 entry? Actually 0 entries
-		binary.LittleEndian.PutUint32(buf[4:], 0)        // startBlock (unused for empty)
-		binary.LittleEndian.PutUint32(buf[8:], node.ino) // inodeNum
-		n, _ := dirMeta.Write(buf)
-		bytesWritten += n
-		return bytesWritten, nil
+		// Empty directory - no data to write.
+		// Size will be set to 3 (the squashfs convention) by the caller.
+		return 0, nil
 	}
 
 	currentIdx := 0
@@ -498,7 +640,7 @@ func (w *Writer) writeInode(node *writerInode, inodeMeta *streamingMetaWriter) e
 
 	// Common header (bytes.Buffer never fails, explicitly ignore errors)
 	_ = binary.Write(buf, order, node.fileType)
-	_ = binary.Write(buf, order, uint16(node.mode&0777))
+	_ = binary.Write(buf, order, uint16(modeToUnix(node.mode)&0xFFF))
 	_ = binary.Write(buf, order, uint16(w.idTable[node.uid]))
 	_ = binary.Write(buf, order, uint16(w.idTable[node.gid]))
 	_ = binary.Write(buf, order, int32(node.modTime))
@@ -546,7 +688,7 @@ func (w *Writer) writeInode(node *writerInode, inodeMeta *streamingMetaWriter) e
 
 	case CharDevType, BlockDevType:
 		_ = binary.Write(buf, order, node.nlink)
-		_ = binary.Write(buf, order, uint32(0))
+		_ = binary.Write(buf, order, node.rdev)
 
 	case FifoType, SocketType:
 		_ = binary.Write(buf, order, node.nlink)
@@ -611,13 +753,21 @@ func (w *Writer) writeFileData() error {
 
 	for _, p := range paths {
 		inode := w.inodeMap[p]
-		if inode.fileType != FileType || inode.size == 0 || inode.srcFS == nil {
+		if inode.fileType != FileType || inode.size == 0 {
 			continue
 		}
 
-		data, err := fs.ReadFile(inode.srcFS, inode.path)
-		if err != nil {
-			return err
+		var data []byte
+		if inode.fileData != nil {
+			data = inode.fileData
+		} else if inode.srcFS != nil {
+			var err error
+			data, err = fs.ReadFile(inode.srcFS, inode.path)
+			if err != nil {
+				return err
+			}
+		} else {
+			continue
 		}
 
 		inode.startBlock = w.offset
